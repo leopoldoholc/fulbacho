@@ -1,5 +1,3 @@
 streamlit
-pip install st-supabase-connection
+supabase
 httpx==0.27.2
-
-
