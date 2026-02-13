@@ -4,84 +4,87 @@ import urllib.parse
 
 st.set_page_config(page_title="Draft Master Pro", page_icon="⚽")
 
-# --- CONEXIÓN ---
-try:
-    conn = st.connection("supabase", type=SupabaseConnection)
-except Exception as e:
-    st.error("Error de conexión. Revisá los Secrets.")
-    st.stop()
+# --- CONEXIÓN OFICIAL ---
+@st.cache_resource(ttl=60) # Cache de 1 minuto para no saturar
+def get_conn():
+    try:
+        return st.connection("supabase", type=SupabaseConnection)
+    except:
+        return None
+
+conn = get_conn()
 
 st.title("⚽ Draft Master Pro")
 
-# --- LECTURA DE DATOS REFORZADA ---
-try:
-    # Intentamos traer los datos
-    res = conn.table("usuarios").select("*").execute()
-    jugadores = res.data if res.data else []
-    if jugadores:
-        st.success(f"¡Se encontraron {len(jugadores)} jugadores!")
-except Exception as e:
-    st.error(f"Error técnico al leer la tabla: {e}")
-    st.info("💡 Si el error dice 'Policy', tenés que activar las RLS en Supabase.")
-    jugadores = []
+# --- LECTURA DE DATOS ---
+jugadores = []
+if conn:
+    try:
+        res = conn.table("usuarios").select("*").execute()
+        jugadores = res.data if res.data else []
+    except Exception as e:
+        st.error(f"Error de red o tabla: {e}")
 
-# 1. REGISTRO (Adaptado a tus columnas)
+# --- DEFINIMOS LAS PESTAÑAS (Aquí estaba el NameError) ---
+tab_reg, tab_vot, tab_admin = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Armar Equipos"])
+
 with tab_reg:
     st.header("Nuevo Jugador")
-    with st.form("registro"):
+    with st.form("registro_form"):
         nom = st.text_input("Nombre Completo")
-        email = st.text_input("Email (Opcional)")
-        # Tu tabla usa un ARRAY de texto para posiciones
-        pos = st.multiselect("Posiciones Preferidas", ["Arquero", "Defensor", "Mediocampista", "Delantero"])
+        # Tu campo en Supabase es un ARRAY, así que mandamos una lista
+        pos = st.multiselect("Posiciones", ["Arquero", "Defensor", "Mediocampista", "Delantero"])
         
         if st.form_submit_button("Registrar"):
-            if nom and pos:
+            if nom and pos and conn:
                 try:
                     conn.table("usuarios").insert({
                         "nombre": nom,
-                        "email": email,
-                        "posiciones_preferidas": pos  # Se manda como lista de Python
+                        "posiciones_preferidas": pos
                     }).execute()
-                    st.success(f"¡{nom} registrado!")
+                    st.success("¡Registrado!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error al insertar: {e}")
+                    st.error(f"No se pudo guardar: {e}")
 
-# 2. CALIFICAR (Usando tu estructura)
 with tab_vot:
-    st.header("Nivel de juego")
+    st.header("Nivel de los Pibes")
     if not jugadores:
-        st.info("Registrá al menos un jugador para verlo aquí.")
+        st.info("No hay jugadores para calificar.")
     else:
         for j in jugadores:
-            # Mostramos las posiciones que vienen del ARRAY
-            pos_str = ", ".join(j['posiciones_preferidas']) if j['posiciones_preferidas'] else "Sin posición"
-            with st.expander(f"⭐ {j['nombre']} ({pos_str})"):
-                st.write("Aquí podrías calificar, pero tu tabla actual no tiene el campo 'nivel'.")
-                st.info("Tip: Agregá una columna llamada 'nivel' (tipo float8) en Supabase para guardar puntajes.")
+            # Manejamos el array de posiciones para mostrarlo lindo
+            p_list = j.get('posiciones_preferidas', [])
+            p_str = ", ".join(p_list) if p_list else "Sin posición"
+            
+            with st.expander(f"⭐ {j['nombre']} ({p_str})"):
+                st.write("Para calificar, agregá la columna 'nivel' en Supabase.")
 
-# 3. ADMIN
 with tab_admin:
-    st.header("Armar Partido")
-    presentes = []
-    for j in jugadores:
-        if st.checkbox(f"{j['nombre']}", key=f"chk_{j['id']}"):
-            presentes.append(j)
-            
-    if st.button("⚖️ Generar Equipos"):
-        if len(presentes) < 2:
-            st.error("Seleccioná más jugadores.")
-        else:
-            # Reparto simple 50/50 ya que no tenemos 'nivel' todavía
-            import random
-            random.shuffle(presentes)
-            mitad = len(presentes) // 2
-            eq_a = presentes[:mitad]
-            eq_b = presentes[mitad:]
-            
-            c1, c2 = st.columns(2)
-            c1.success("🔵 Equipo A")
-            for x in eq_a: c1.write(f"- {x['nombre']}")
-            c2.error("🔴 Equipo B")
-            for x in eq_b: c2.write(f"- {x['nombre']}")
-
+    st.header("Generador de Equipos")
+    if not jugadores:
+        st.write("Registrá gente primero.")
+    else:
+        presentes = []
+        for j in jugadores:
+            if st.checkbox(f"{j['nombre']}", key=f"p_{j['id']}"):
+                presentes.append(j)
+        
+        if st.button("⚖️ Armar"):
+            if len(presentes) >= 2:
+                import random
+                random.shuffle(presentes)
+                m = len(presentes) // 2
+                ea, eb = presentes[:m], presentes[m:]
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.success("🔵 Equipo A")
+                    for x in ea: st.write(f"- {x['nombre']}")
+                with c2:
+                    st.error("🔴 Equipo B")
+                    for x in eb: st.write(f"- {x['nombre']}")
+                
+                msg = f"⚽ Equipos:\n\nA: " + ", ".join([x['nombre'] for x in ea])
+                msg += f"\nB: " + ", ".join([x['nombre'] for x in eb])
+                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
