@@ -3,19 +3,23 @@ from supabase import create_client, Client
 import urllib.parse
 import time
 
-# --- CONFIGURACIÓN DE CONEXIÓN SEGURA ---
-# Intentamos leer de st.secrets (para la nube) o directo (para local)
+# --- CONEXIÓN DIRECTA A SECRETS ---
+# Streamlit Cloud leerá automáticamente lo que pegaste en la pestaña Secrets
 try:
-    URL = st.secrets["SUPABASE_URL"]
-    KEY = st.secrets["SUPABASE_KEY"]
-except:
-    # Estos son tus datos que pasaste antes
-    URL = "https://hodkvspfzoyobjkwefxf.supabase.co"
-    KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvZGt2c3Bmem95b2JrendlZnhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5ODgyMDksImV4cCI6MjA4NjU2NDIwOX0.K6x_hR-xLPO1YbOEIm3F6PUpLoKv29_vLM3pLT59Fwg"
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error("Error crítico de conexión. Verificá los Secrets en Streamlit Cloud.")
+    st.write(f"Detalle técnico: {e}")
+    st.stop() # Detiene la app para no mostrar errores feos abajo
+
+# Si llegamos acá, la conexión es exitosa
+# ... (el resto de tu código de pestañas y lógica de fútbol)
 
 supabase: Client = create_client(URL, KEY)
 
-st.set_page_config(page_title="Draft Master Cloud", page_icon="⚽")
+st.set_page_config(page_title="Arma Tus Equipos Parejos", page_icon="⚽")
 
 # --- PESTAÑAS ---
 tab_reg, tab_vot, tab_admin = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Armar Equipos"])
@@ -75,4 +79,5 @@ with tab_admin:
         # UI Resultados y WhatsApp (igual que antes)
         st.write("Equipos listos en consola y listos para enviar.")
         sum_a, sum_b = sum(x['nivel'] for x in eq_a), sum(x['nivel'] for x in eq_b)
+
         st.metric("Equilibrio", f"Dif: {abs(sum_a - sum_b):.1f}")
