@@ -13,16 +13,17 @@ except Exception as e:
 
 st.title("⚽ Draft Master Pro")
 
-# --- LECTURA DE DATOS ---
+# --- LECTURA DE DATOS REFORZADA ---
 try:
-    # Traemos los campos que tenés en tu tabla
-    res = conn.table("usuarios").select("id, nombre, posiciones_preferidas").execute()
+    # Intentamos traer los datos
+    res = conn.table("usuarios").select("*").execute()
     jugadores = res.data if res.data else []
+    if jugadores:
+        st.success(f"¡Se encontraron {len(jugadores)} jugadores!")
 except Exception as e:
-    st.warning("Conectado, pero no se pudo leer la tabla 'usuarios'.")
+    st.error(f"Error técnico al leer la tabla: {e}")
+    st.info("💡 Si el error dice 'Policy', tenés que activar las RLS en Supabase.")
     jugadores = []
-
-tab_reg, tab_vot, tab_admin = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Armar Equipos"])
 
 # 1. REGISTRO (Adaptado a tus columnas)
 with tab_reg:
@@ -83,3 +84,4 @@ with tab_admin:
             for x in eq_a: c1.write(f"- {x['nombre']}")
             c2.error("🔴 Equipo B")
             for x in eq_b: c2.write(f"- {x['nombre']}")
+
