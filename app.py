@@ -1,5 +1,18 @@
 import streamlit as st
 from supabase import create_client, Client
+
+# --- CONEXIÓN DIRECTA ---
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+
+# Creamos el cliente sin decoradores (cache) para probar
+try:
+    supabase: Client = create_client(url, key)
+    # Intento de lectura inicial
+    test = supabase.table("usuarios").select("id").limit(1).execute()
+    st.success("🔥 ¡CONECTADO A SUPABASE!")
+except Exception as e:
+    st.error(f"Fallo total: {e}")
 import urllib.parse
 
 # Configuración de página
