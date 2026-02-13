@@ -1,90 +1,122 @@
 import streamlit as st
 from supabase import create_client, Client
-
-# --- CONEXIÓN DIRECTA ---
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-
-# Creamos el cliente sin decoradores (cache) para probar
-try:
-    supabase: Client = create_client(url, key)
-    # Intento de lectura inicial
-    test = supabase.table("usuarios").select("id").limit(1).execute()
-    st.success("🔥 ¡CONECTADO A SUPABASE!")
-except Exception as e:
-    st.error(f"Fallo total: {e}")
 import urllib.parse
 
-# Configuración de página
-st.set_page_config(page_title="Draft Master Pro", page_icon="⚽")
-
-# --- CONEXIÓN SEGURA ---
-@st.cache_resource
-def get_supabase():
+# --- 1. INTENTO DE CONEXIÓN (CON RED DE SEGURIDAD) ---
+def conectar_supabase():
     try:
-        # Intentamos sacar las credenciales de los Secrets
+        # Buscamos en los Secrets de Streamlit Cloud
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
         return create_client(url, key)
-    except Exception as e:
+    except Exception:
+        # Si no los encuentra, devolvemos None para mostrar un error amigable
         return None
 
-supabase = get_supabase()
+# Inicializamos la conexión
+supabase = conectar_supabase()
 
-# --- INTERFAZ ---
-st.title("⚽ Draft Master Pro")
+# --- 2. CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="Draft Master Pro", page_icon="⚽")
 
 if supabase is None:
-    st.error("❌ No se pudo conectar a la base de datos.")
-    st.info("Revisá que en 'Settings > Secrets' estén SUPABASE_URL y SUPABASE_KEY.")
-    st.stop()
+    st.error("🚨 ERROR: No se encontraron las credenciales de Supabase.")
+    st.info("""
+    **Para arreglar esto:**
+    1. Anda a tu panel de Streamlit Cloud.
+    2. En tu App, toca 'Manage App' -> 'Settings' -> 'Secrets'.
+    3. Asegurate de que diga exactamente:
+    ```toml
+    SUPABASE_URL = "tu_url_aqui"
+    SUPABASE_KEY = "tu_key_aqui"
+    ```
+    """)
+    st.stop() # Frenamos la app hasta que se arreglen los Secrets
 
-tab1, tab2, tab3 = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Admin"])
+st.title("⚽ Draft Master Pro")
 
-# 1. REGISTRO
-with tab1:
-    with st.form("reg"):
-        nom = st.text_input("Nombre")
-        pos = st.multiselect("Posición", ["Arquero", "Defensor", "Mediocampista", "Delantero"])
-        if st.form_submit_button("Registrar"):
-            if nom and pos:
-                supabase.table("usuarios").insert({"nombre": nom, "posicion": " / ".join(pos), "nivel": 5.0}).execute()
-                st.success("¡Guardado!")
-                st.rerun()
+tab_reg, tab_vot, tab_admin = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Armar Equipos"])
 
-# 2. CALIFICAR
-with tab2:
+# --- 3. PESTAÑA DE REGISTRO ---
+with tab_reg:
+    st.header("Sumate al equipo")
+    with st.form("registro"):
+        nombre = st.text_input("Nombre / Apodo")
+        posiciones = st.multiselect("Posiciones", ["Arquero", "Defensor", "Mediocampista", "Delantero"])
+        grupo = st.selectbox("Grupo", ["Fútbol Martes", "Fútbol Jueves", "Amigos"])
+        
+        if st.form_submit_button("Registrar Jugador"):
+            if nombre and posiciones:
+                data = {
+                    "nombre": nombre,
+                    "posicion": " / ".join(posiciones),
+                    "grupo": grupo,
+                    "nivel": 5.0
+                }
+                supabase.table("usuarios").insert(data).execute()
+                st.success(f"¡{nombre} registrado con éxito!")
+                st.balloons()
+            else:
+                st.warning("Completá todos los campos.")
+
+# --- 4. PESTAÑA DE VOTACIÓN ---
+with tab_vot:
+    st.header("Calificaciones (Un clic)")
     res = supabase.table("usuarios").select("*").execute()
     jugadores = res.data if res.data else []
-    for j in jugadores:
-        with st.expander(f"Calificar a {j['nombre']}"):
-            nuevo_n = st.select_slider("Nivel", options=[i/2 for i in range(2, 21)], value=float(j['nivel']), key=f"n_{j['id']}")
-            if st.button("Actualizar", key=f"b_{j['id']}"):
-                supabase.table("usuarios").update({"nivel": nuevo_n}).eq("id", j['id']).execute()
-                st.toast("Actualizado")
 
-# 3. ADMIN
-with tab3:
     if not jugadores:
-        st.write("No hay jugadores.")
+        st.info("No hay jugadores registrados.")
     else:
-        seleccionados = []
+        # Habilidades por puesto
+        sk_jug = ["Velocidad", "Habilidad", "Resistencia", "Fuerza", "Visión", "Defensa", "Esfuerzo"]
+        sk_arq = ["Reflejos", "Salidas", "Saque", "Ubicación", "Mano a Mano", "Seguridad"]
+
         for j in jugadores:
-            if st.checkbox(f"{j['nombre']} ({j['posicion']})", key=f"c_{j['id']}"):
-                seleccionados.append(j)
-        
-        if st.button("Armar Equipos"):
-            # Lógica simple de arqueros y nivel
-            arqs = [x for x in seleccionados if "Arquero" in x['posicion']]
-            ots = [x for x in seleccionados if "Arquero" not in x['posicion']]
+            es_arq = "Arquero" in j['posicion']
+            with st.expander(f"⭐ {j['nombre']} ({'Arquero' if es_arq else 'Jugador'})"):
+                lista = sk_arq if es_arq else sk_jug
+                votos = []
+                for s in lista:
+                    n = st.radio(f"{s}", [1,2,3,4,5,6,7,8,9,10], index=4, horizontal=True, key=f"s_{s}_{j['id']}")
+                    votos.append(n)
+                
+                promedio = sum(votos) / len(votos)
+                if st.button(f"Guardar Promedio: {promedio:.2f}", key=f"btn_{j['id']}"):
+                    supabase.table("usuarios").update({"nivel": promedio}).eq("id", j['id']).execute()
+                    st.toast("¡Nivel actualizado!")
+
+# --- 5. PESTAÑA ADMIN (EQUIPOS) ---
+with tab_admin:
+    st.header("Armado de Equipos")
+    res_admin = supabase.table("usuarios").select("*").execute()
+    presentes = []
+    if res_admin.data:
+        for p in res_admin.data:
+            if st.checkbox(f"{p['nombre']} ({p['posicion']})", key=f"p_{p['id']}"):
+                presentes.append(p)
+
+    if st.button("⚖️ Generar Equipos"):
+        if len(presentes) < 2:
+            st.error("Faltan jugadores para el partido.")
+        else:
+            arqs = [x for x in presentes if "Arquero" in x['posicion']]
+            ots = [x for x in presentes if "Arquero" not in x['posicion']]
             ots.sort(key=lambda x: x['nivel'], reverse=True)
             
             eq_a, eq_b = [], []
             for i, a in enumerate(arqs): (eq_a if i%2==0 else eq_b).append(a)
             for o in ots: (eq_a if sum(x['nivel'] for x in eq_a) <= sum(x['nivel'] for x in eq_b) else eq_b).append(o)
             
-            c1, c2 = st.columns(2)
-            c1.write("🔵 **Equipo A**")
-            for x in eq_a: c1.write(f"- {x['nombre']}")
-            c2.write("🔴 **Equipo B**")
-            for x in eq_b: c2.write(f"- {x['nombre']}")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.success("🔵 **Equipo A**")
+                for x in eq_a: st.write(f"- {x['nombre']}")
+            with col2:
+                st.error("🔴 **Equipo B**")
+                for x in eq_b: st.write(f"- {x['nombre']}")
+
+            # WhatsApp
+            msg = f"⚽ *Equipos del día*\n\n🔵 *EQUIPO A:*\n" + "\n".join([f"- {j['nombre']}" for j in eq_a])
+            msg += f"\n\n🔴 *EQUIPO B:*\n" + "\n".join([f"- {j['nombre']}" for j in eq_b])
+            st.link_button("📲 Enviar a WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
