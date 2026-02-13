@@ -3,17 +3,33 @@ from supabase import create_client, Client
 import urllib.parse
 import time
 
-# --- 1. CONEXIÓN A BASE DE DATOS ---
-# Usamos st.secrets para conectar con Supabase en la nube
-try:
-    # Estas deben coincidir con lo que pegaste en la pestaña Secrets
-    URL_DB = st.secrets["SUPABASE_URL"]
-    KEY_DB = st.secrets["SUPABASE_KEY"]
-    supabase: Client = create_client(URL_DB, KEY_DB)
-except Exception as e:
-    st.error("⚠️ Error de configuración en los Secrets de Streamlit.")
-    st.info("Asegurate de que en Secrets diga: SUPABASE_URL y SUPABASE_KEY")
+# --- CONEXIÓN CON VALIDACIÓN ---
+@st.cache_resource # Esto evita reconectar todo el tiempo
+def init_connection():
+    try:
+        url = st.secrets["SUPABASE_URL"].strip()
+        key = st.secrets["SUPABASE_KEY"].strip()
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Error al leer Secrets: {e}")
+        return None
+
+supabase = init_connection()
+
+if supabase is None:
     st.stop()
+
+# --- FUNCIÓN PARA TRAER DATOS SEGURA ---
+def obtener_jugadores():
+    try:
+        res = supabase.table("usuarios").select("*").execute()
+        return res.data
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los jugadores: {e}")
+        return []
+
+
+
 
 # --- 2. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Draft Master Pro", page_icon="⚽")
@@ -114,3 +130,4 @@ with tab_admin:
                 txt = f"⚽ *Equipos del día*\n\n🔵 *EQUIPO A:*\n" + "\n".join([f"- {j['nombre']}" for j in eq_a])
                 txt += f"\n\n🔴 *EQUIPO B:*\n" + "\n".join([f"- {j['nombre']}" for j in eq_b])
                 st.link_button("📲 Enviar a WhatsApp", f"https://wa.me/?text={urllib.parse.quote(txt)}")
+
