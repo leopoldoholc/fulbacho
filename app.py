@@ -1,8 +1,7 @@
 import streamlit as st
 from supabase import create_client
-import httpx
 
-st.set_page_config(page_title="Draft Master Pro", page_icon="⚽")
+st.set_page_config(page_title="Fulbacho Pro", page_icon="⚽")
 
 # -------------------------------
 # CONEXIÓN
@@ -30,8 +29,7 @@ def login():
         {
             "provider": "google",
             "options": {
-                # CAMBIAR por tu URL real cuando publiques
-                "redirect_to": "http://localhost:8501"
+                "redirect_to": "https://fulbacho.streamlit.app"
             }
         }
     )
@@ -70,93 +68,100 @@ try:
         supabase.table("usuarios").insert({
             "id": user.id,
             "nombre": user.user_metadata.get("full_name", user.email),
+            "email": user.email,
             "posiciones_preferidas": []
         }).execute()
-
 except Exception as e:
     st.error(f"Error validando usuario: {e}")
 
-st.title("⚽ Draft Master Pro")
+st.title("⚽ Fulbacho Pro")
 st.success(f"Logueado como {user.email}")
 
 if st.button("Cerrar sesión"):
     logout()
 
 # -------------------------------
-# CARGAR JUGADORES
-# -------------------------------
-jugadores = []
-try:
-    res = supabase.table("usuarios").select("*").execute()
-    jugadores = res.data if res.data else []
-except Exception as e:
-    st.warning(f"No se pudo leer la tabla: {e}")
-
-# -------------------------------
 # PESTAÑAS
 # -------------------------------
-t1, t2, t3 = st.tabs(["📝 Registro", "⭐ Calificar", "⚙️ Admin"])
+t0, t1, t2, t3 = st.tabs(["🏟️ Grupos", "📝 Perfil", "⭐ Jugadores", "⚙️ Admin"])
 
-# -------------------------------
-# REGISTRO / EDITAR PERFIL
-# -------------------------------
-with t1:
-    st.subheader("Editar mi perfil")
+# =====================================================
+# 🏟️ GRUPOS
+# =====================================================
+with t0:
+    st.subheader("Mis Grupos")
 
-    with st.form("reg_form"):
-        nombre = st.text_input("Tu nombre visible")
+    membresias = supabase.table("grupo_miembros") \
+        .select("grupo_id, rol") \
+        .eq("usuario_id", user.id) \
+        .execute()
 
-        pos = st.multiselect(
-            "Posiciones",
-            ["Arquero", "Defensor", "Mediocampista", "Delantero"]
-        )
+    grupos_usuario = []
 
-        submit = st.form_submit_button("Guardar cambios")
-
-        if submit and nombre:
-
-            # VALIDAR NOMBRE DUPLICADO
-            check = supabase.table("usuarios")\
-                .select("id")\
-                .eq("nombre", nombre)\
-                .neq("id", user.id)\
+    if membresias.data:
+        for m in membresias.data:
+            grupo = supabase.table("grupos") \
+                .select("*") \
+                .eq("id", m["grupo_id"]) \
+                .single() \
                 .execute()
 
-            if check.data:
-                st.error("⚠️ Ese nombre ya está en uso.")
-            else:
-                try:
-                    supabase.table("usuarios")\
-                        .update({
-                            "nombre": nombre,
-                            "posiciones_preferidas": pos
-                        })\
-                        .eq("id", user.id)\
-                        .execute()
+            if grupo.data:
+                grupos_usuario.append({
+                    "nombre": grupo.data["nombre"],
+                    "codigo": grupo.data["codigo_invitacion"],
+                    "rol": m["rol"]
+                })
 
-                    st.success("Perfil actualizado")
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"Error al guardar: {e}")
-
-# -------------------------------
-# LISTADO
-# -------------------------------
-with t2:
-    if not jugadores:
-        st.write("No hay jugadores cargados todavía.")
+    if grupos_usuario:
+        for g in grupos_usuario:
+            st.write(f"🏆 {g['nombre']} | Código: {g['codigo']} | Rol: {g['rol']}")
     else:
-        for j in jugadores:
-            posiciones = j.get("posiciones_preferidas") or []
-            st.write(f"👤 {j['nombre']} - {', '.join(posiciones)}")
+        st.info("Todavía no pertenecés a ningún grupo.")
 
-# -------------------------------
-# ADMIN
-# -------------------------------
-with t3:
-    st.write(f"Total de jugadores: {len(jugadores)}")
+    st.divider()
 
-    if st.button("Limpiar Cache de Conexión"):
-        st.cache_resource.clear()
-        st.rerun()
+    # CREAR GRUPO
+    st.subheader("Crear Grupo")
+
+    with st.form("crear_grupo"):
+        nombre_grupo = st.text_input("Nombre del grupo")
+        tipo_cancha = st.selectbox(
+            "Tipo de cancha",
+            ["5", "6", "7", "8", "9", "10", "11"]
+        )
+
+        crear = st.form_submit_button("Crear")
+
+        if crear and nombre_grupo:
+            try:
+                codigo = supabase.rpc("generar_codigo_invitacion").execute().data
+
+                nuevo = supabase.table("grupos").insert({
+                    "nombre": nombre_grupo,
+                    "tipo_cancha": tipo_cancha,
+                    "codigo_invitacion": codigo
+                }).execute()
+
+                grupo_id = nuevo.data[0]["id"]
+
+                supabase.table("grupo_miembros").insert({
+                    "grupo_id": grupo_id,
+                    "usuario_id": user.id,
+                    "rol": "admin"
+                }).execute()
+
+                st.success(f"Grupo creado! Código: {codigo}")
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Error creando grupo: {e}")
+
+    st.divider()
+
+    # UNIRSE A GRUPO
+    st.subheader("Unirse a Grupo")
+
+    with st.form("unirse_grupo"):
+        codigo_input = st.text_input("Código de invitación").upper()
+        unirse = st.form_su_
