@@ -35,23 +35,22 @@ def login():
             }
         )
 
-        auth_url = response.get("url")
+        auth_url = response.url  # <-- acá está la diferencia
 
-        if auth_url:
-            st.markdown(f"[Click acá si no redirige automáticamente]({auth_url})")
-            st.experimental_set_query_params()  # limpia params
-            st.write("Redirigiendo...")
-            st.components.v1.html(
-                f"""
-                <script>
+        st.markdown(f"[Click acá si no redirige automáticamente]({auth_url})")
+
+        st.components.v1.html(
+            f"""
+            <script>
                 window.location.href = "{auth_url}";
-                </script>
-                """,
-                height=0,
-            )
+            </script>
+            """,
+            height=0,
+        )
 
     except Exception as e:
         st.error(f"Error en login: {e}")
+
 
 def logout():
     supabase.auth.sign_out()
@@ -184,4 +183,5 @@ with t0:
     with st.form("unirse_grupo"):
         codigo_input = st.text_input("Código de invitación").upper()
         unirse = st.form_su_
+
 
