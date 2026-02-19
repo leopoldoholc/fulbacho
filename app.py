@@ -24,6 +24,44 @@ supabase = init_connection()
 if "user" not in st.session_state:
     st.session_state.user = None
 
+import urllib.parse
+
+# ---------------------------------
+# MANEJO DE LOGIN OAUTH STREAMLIT
+# ---------------------------------
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+# Capturar tokens del URL después del login
+query_params = st.query_params
+
+if "access_token" in query_params:
+
+    access_token = query_params["access_token"]
+    refresh_token = query_params.get("refresh_token")
+
+    try:
+        supabase.auth.set_session(access_token, refresh_token)
+        session = supabase.auth.get_session()
+
+        if session and session.user:
+            st.session_state.user = session.user
+
+        # Limpiar URL para que no quede el token visible
+        st.query_params.clear()
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"Error creando sesión: {e}")
+
+# Si ya hay sesión activa
+if not st.session_state.user:
+    session = supabase.auth.get_session()
+    if session and session.user:
+        st.session_state.user = session.user
+
+
 def login():
     try:
         response = supabase.auth.sign_in_with_oauth(
@@ -35,9 +73,7 @@ def login():
             }
         )
 
-        auth_url = response.url  # <-- acá está la diferencia
-
-        st.markdown(f"[Click acá si no redirige automáticamente]({auth_url})")
+        auth_url = response.url
 
         st.components.v1.html(
             f"""
@@ -183,5 +219,6 @@ with t0:
     with st.form("unirse_grupo"):
         codigo_input = st.text_input("Código de invitación").upper()
         unirse = st.form_su_
+
 
 
