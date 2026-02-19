@@ -25,14 +25,33 @@ if "user" not in st.session_state:
     st.session_state.user = None
 
 def login():
-    supabase.auth.sign_in_with_oauth(
-        {
-            "provider": "google",
-            "options": {
-                "redirect_to": "https://fulbacho.streamlit.app"
+    try:
+        response = supabase.auth.sign_in_with_oauth(
+            {
+                "provider": "google",
+                "options": {
+                    "redirect_to": "https://fulbacho.streamlit.app"
+                }
             }
-        }
-    )
+        )
+
+        auth_url = response.get("url")
+
+        if auth_url:
+            st.markdown(f"[Click acá si no redirige automáticamente]({auth_url})")
+            st.experimental_set_query_params()  # limpia params
+            st.write("Redirigiendo...")
+            st.components.v1.html(
+                f"""
+                <script>
+                window.location.href = "{auth_url}";
+                </script>
+                """,
+                height=0,
+            )
+
+    except Exception as e:
+        st.error(f"Error en login: {e}")
 
 def logout():
     supabase.auth.sign_out()
@@ -165,3 +184,4 @@ with t0:
     with st.form("unirse_grupo"):
         codigo_input = st.text_input("Código de invitación").upper()
         unirse = st.form_su_
+
