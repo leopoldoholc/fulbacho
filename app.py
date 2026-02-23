@@ -250,6 +250,43 @@ with t0:
     if unirse:
         # lógica para unirse al grupo
         st.write("Intentando unirse con código:", codigo)
+# =====================================================
+# 📝 PERFIL
+# =====================================================
+with t1:
+    st.subheader("Mi Perfil")
+
+    datos = supabase.table("usuarios") \
+        .select("*") \
+        .eq("id", user.id) \
+        .single() \
+        .execute()
+
+    if datos.data:
+        st.write("Nombre:", datos.data["nombre"])
+        st.write("Email:", datos.data["email"])
+        st.write("Posiciones preferidas:", datos.data["posiciones_preferidas"])
+    else:
+        st.info("No se encontraron datos del perfil.")
+
+
+# =====================================================
+# ⭐ JUGADORES
+# =====================================================
+with t2:
+    st.subheader("Jugadores del Sistema")
+
+    st.info("Próximamente listado de jugadores del grupo.")
+
+
+# =====================================================
+# ⚙️ ADMIN
+# =====================================================
+with t3:
+    st.subheader("Panel de Administración")
+
+    st.info("Opciones de administración del grupo aparecerán aquí.")
+
 
 
 
