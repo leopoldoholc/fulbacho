@@ -242,10 +242,16 @@ with t0:
 
     # UNIRSE A GRUPO
     st.subheader("Unirse a Grupo")
+    
+    with st.form("form_unirse"):
+        codigo = st.text_input("Código de invitación")
+        unirse = st.form_submit_button("Unirse")
+    
+    if unirse:
+        # lógica para unirse al grupo
+        st.write("Intentando unirse con código:", codigo)
 
-    with st.form("unirse_grupo"):
-        codigo_input = st.text_input("Código de invitación").upper()
-        unirse = st.form_su_
+
 
 
 
