@@ -1,175 +1,112 @@
 import streamlit as st
 from supabase import create_client
+import random
+import string
 
 st.set_page_config(page_title="Fulbacho Pro", page_icon="⚽")
 
-# -------------------------------
-# CONEXIÓN
-# -------------------------------
+# =====================================================
+# 🔌 CONEXIÓN
+# =====================================================
 @st.cache_resource
 def init_connection():
-    try:
-        url = st.secrets["connections"]["supabase"]["SUPABASE_URL"].strip()
-        key = st.secrets["connections"]["supabase"]["SUPABASE_KEY"].strip()
-        return create_client(url, key)
-    except Exception as e:
-        st.error(f"Error cargando credenciales: {e}")
-        return None
+    url = st.secrets["connections"]["supabase"]["SUPABASE_URL"].strip()
+    key = st.secrets["connections"]["supabase"]["SUPABASE_KEY"].strip()
+    return create_client(url, key)
 
 supabase = init_connection()
 
-# ---------------------------------
-# MANEJO PKCE OAUTH (SUPABASE)
-# ---------------------------------
 
+# =====================================================
+# 🔐 AUTH
+# =====================================================
 if "user" not in st.session_state:
     st.session_state.user = None
 
-query_params = st.query_params
 
-# Si volvemos con ?code=...
-if "code" in query_params:
+def manejar_oauth():
+    query_params = st.query_params
 
-    code = query_params["code"]
+    if "code" in query_params:
+        code = query_params["code"]
 
-    try:
-        supabase.auth.exchange_code_for_session({"auth_code": code})
-        session = supabase.auth.get_session()
+        try:
+            supabase.auth.exchange_code_for_session({"auth_code": code})
+            session = supabase.auth.get_session()
 
-        if session and session.user:
-            st.session_state.user = session.user
+            if session and session.user:
+                st.session_state.user = session.user
 
-        # limpiar URL
-        st.query_params.clear()
-        st.rerun()
+            st.query_params.clear()
+            st.rerun()
 
-    except Exception as e:
-        st.error(f"Error intercambiando código: {e}")
-
-# Si ya hay sesión
-if not st.session_state.user:
-    session = supabase.auth.get_session()
-    if session and session.user:
-        st.session_state.user = session.user
-
-
-# -------------------------------
-# LOGIN GOOGLE
-# -------------------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-import urllib.parse
-
-# ---------------------------------
-# MANEJO DE LOGIN OAUTH STREAMLIT
-# ---------------------------------
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-# Capturar tokens del URL después del login
-query_params = st.query_params
-
-if "access_token" in query_params:
-
-    access_token = query_params["access_token"]
-    refresh_token = query_params.get("refresh_token")
-
-    try:
-        supabase.auth.set_session(access_token, refresh_token)
-        session = supabase.auth.get_session()
-
-        if session and session.user:
-            st.session_state.user = session.user
-
-        # Limpiar URL para que no quede el token visible
-        st.query_params.clear()
-        st.rerun()
-
-    except Exception as e:
-        st.error(f"Error creando sesión: {e}")
-
-# Si ya hay sesión activa
-if not st.session_state.user:
-    session = supabase.auth.get_session()
-    if session and session.user:
-        st.session_state.user = session.user
+        except Exception as e:
+            st.error(f"Error intercambiando código: {e}")
 
 
 def login():
-    try:
-        response = supabase.auth.sign_in_with_oauth(
-            {
-                "provider": "google",
-                "options": {
-                    "redirect_to": "https://fulbacho.streamlit.app"
-                }
+    response = supabase.auth.sign_in_with_oauth(
+        {
+            "provider": "google",
+            "options": {
+                "redirect_to": "https://fulbacho.streamlit.app"
             }
-        )
+        }
+    )
 
-        auth_url = response.url
+    st.link_button("👉 Continuar con Google", response.url)
 
-        st.link_button("👉 Continuar con Google", auth_url)
-
-    except Exception as e:
-        st.error(f"Error en login: {e}")
 
 def logout():
     supabase.auth.sign_out()
     st.session_state.user = None
     st.rerun()
 
-# Detectar sesión activa
-if supabase:
+
+def obtener_sesion():
     session = supabase.auth.get_session()
     if session and session.user:
         st.session_state.user = session.user
 
-# -------------------------------
-# SI NO ESTÁ LOGUEADO
-# -------------------------------
+
+manejar_oauth()
+obtener_sesion()
+
+
+# =====================================================
+# 🚪 LOGIN SCREEN
+# =====================================================
 if not st.session_state.user:
-    st.title("⚽ Draft Master Pro")
+    st.title("⚽ Fulbacho Pro")
     st.subheader("Login requerido")
+
     if st.button("Iniciar sesión con Google"):
         login()
+
     st.stop()
 
-# -------------------------------
-# USUARIO LOGUEADO
-# -------------------------------
+
 user = st.session_state.user
 
-# Crear registro en tabla usuarios si no existe
-try:
-    existing = supabase.table("usuarios").select("*").eq("id", user.id).execute()
+# =====================================================
+# 👤 CREAR USUARIO SI NO EXISTE
+# =====================================================
+existing = supabase.table("usuarios").select("*").eq("id", user.id).execute()
 
-    if not existing.data:
-        supabase.table("usuarios").insert({
-            "id": user.id,
-            "nombre": user.user_metadata.get("full_name", user.email),
-            "email": user.email,
-            "posiciones_preferidas": []
-        }).execute()
-except Exception as e:
-    st.error(f"Error validando usuario: {e}")
+if not existing.data:
+    supabase.table("usuarios").insert({
+        "id": user.id,
+        "nombre": user.user_metadata.get("full_name", user.email),
+        "email": user.email,
+        "posiciones_preferidas": []
+    }).execute()
 
-st.title("⚽ Fulbacho Pro")
-st.success(f"Logueado como {user.email}")
-
-if st.button("Cerrar sesión"):
-    logout()
-
-# -------------------------------
-# PESTAÑAS
-# -------------------------------
-t0, t1, t2, t3 = st.tabs(["🏟️ Grupos", "📝 Perfil", "⭐ Jugadores", "⚙️ Admin"])
 
 # =====================================================
-# 🏟️ GRUPOS
+# 🧱 VISTAS
 # =====================================================
-with t0:
+
+def vista_grupos():
     st.subheader("Mis Grupos")
 
     membresias = supabase.table("grupo_miembros") \
@@ -202,58 +139,65 @@ with t0:
 
     st.divider()
 
-    # CREAR GRUPO
+    # Crear grupo
     st.subheader("Crear Grupo")
 
     with st.form("crear_grupo"):
-        nombre_grupo = st.text_input("Nombre del grupo")
-        tipo_cancha = st.selectbox(
-            "Tipo de cancha",
-            ["5", "6", "7", "8", "9", "10", "11"]
-        )
-
+        nombre = st.text_input("Nombre del grupo")
+        tipo = st.selectbox("Tipo de cancha", ["5", "6", "7", "8", "9", "10", "11"])
         crear = st.form_submit_button("Crear")
 
-        if crear and nombre_grupo:
-            try:
-                codigo = supabase.rpc("generar_codigo_invitacion").execute().data
+        if crear and nombre:
+            codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-                nuevo = supabase.table("grupos").insert({
-                    "nombre": nombre_grupo,
-                    "tipo_cancha": tipo_cancha,
-                    "codigo_invitacion": codigo
-                }).execute()
+            nuevo = supabase.table("grupos").insert({
+                "nombre": nombre,
+                "tipo_cancha": tipo,
+                "codigo_invitacion": codigo
+            }).execute()
 
-                grupo_id = nuevo.data[0]["id"]
+            grupo_id = nuevo.data[0]["id"]
+
+            supabase.table("grupo_miembros").insert({
+                "grupo_id": grupo_id,
+                "usuario_id": user.id,
+                "rol": "admin"
+            }).execute()
+
+            st.success(f"Grupo creado! Código: {codigo}")
+            st.rerun()
+
+    st.divider()
+
+    # Unirse a grupo
+    st.subheader("Unirse a Grupo")
+
+    with st.form("unirse_grupo"):
+        codigo = st.text_input("Código de invitación")
+        unirse = st.form_submit_button("Unirse")
+
+        if unirse and codigo:
+            grupo = supabase.table("grupos") \
+                .select("id") \
+                .eq("codigo_invitacion", codigo) \
+                .execute()
+
+            if grupo.data:
+                grupo_id = grupo.data[0]["id"]
 
                 supabase.table("grupo_miembros").insert({
                     "grupo_id": grupo_id,
                     "usuario_id": user.id,
-                    "rol": "admin"
+                    "rol": "miembro"
                 }).execute()
 
-                st.success(f"Grupo creado! Código: {codigo}")
+                st.success("Te uniste al grupo!")
                 st.rerun()
+            else:
+                st.error("Código inválido")
 
-            except Exception as e:
-                st.error(f"Error creando grupo: {e}")
 
-    st.divider()
-
-    # UNIRSE A GRUPO
-    st.subheader("Unirse a Grupo")
-    
-    with st.form("form_unirse"):
-        codigo = st.text_input("Código de invitación")
-        unirse = st.form_submit_button("Unirse")
-    
-    if unirse:
-        # lógica para unirse al grupo
-        st.write("Intentando unirse con código:", codigo)
-# =====================================================
-# 📝 PERFIL
-# =====================================================
-with t1:
+def vista_perfil():
     st.subheader("Mi Perfil")
 
     datos = supabase.table("usuarios") \
@@ -262,35 +206,40 @@ with t1:
         .single() \
         .execute()
 
-    if datos.data:
-        st.write("Nombre:", datos.data["nombre"])
-        st.write("Email:", datos.data["email"])
-        st.write("Posiciones preferidas:", datos.data["posiciones_preferidas"])
-    else:
-        st.info("No se encontraron datos del perfil.")
+    st.write("Nombre:", datos.data["nombre"])
+    st.write("Email:", datos.data["email"])
+    st.write("Posiciones preferidas:", datos.data["posiciones_preferidas"])
+
+
+def vista_jugadores():
+    st.subheader("Jugadores")
+    st.info("Próximamente.")
+
+
+def vista_admin():
+    st.subheader("Panel Admin")
+    st.info("Opciones avanzadas pronto.")
 
 
 # =====================================================
-# ⭐ JUGADORES
+# 🎛️ INTERFAZ PRINCIPAL
 # =====================================================
+st.title("⚽ Fulbacho Pro")
+st.success(f"Logueado como {user.email}")
+
+if st.button("Cerrar sesión"):
+    logout()
+
+t0, t1, t2, t3 = st.tabs(["🏟️ Grupos", "📝 Perfil", "⭐ Jugadores", "⚙️ Admin"])
+
+with t0:
+    vista_grupos()
+
+with t1:
+    vista_perfil()
+
 with t2:
-    st.subheader("Jugadores del Sistema")
+    vista_jugadores()
 
-    st.info("Próximamente listado de jugadores del grupo.")
-
-
-# =====================================================
-# ⚙️ ADMIN
-# =====================================================
 with t3:
-    st.subheader("Panel de Administración")
-
-    st.info("Opciones de administración del grupo aparecerán aquí.")
-
-
-
-
-
-
-
-
+    vista_admin()
