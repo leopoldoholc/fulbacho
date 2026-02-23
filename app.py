@@ -18,6 +18,41 @@ def init_connection():
 
 supabase = init_connection()
 
+# ---------------------------------
+# MANEJO PKCE OAUTH (SUPABASE)
+# ---------------------------------
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+query_params = st.query_params
+
+# Si volvemos con ?code=...
+if "code" in query_params:
+
+    code = query_params["code"]
+
+    try:
+        supabase.auth.exchange_code_for_session({"auth_code": code})
+        session = supabase.auth.get_session()
+
+        if session and session.user:
+            st.session_state.user = session.user
+
+        # limpiar URL
+        st.query_params.clear()
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"Error intercambiando código: {e}")
+
+# Si ya hay sesión
+if not st.session_state.user:
+    session = supabase.auth.get_session()
+    if session and session.user:
+        st.session_state.user = session.user
+
+
 # -------------------------------
 # LOGIN GOOGLE
 # -------------------------------
@@ -211,6 +246,7 @@ with t0:
     with st.form("unirse_grupo"):
         codigo_input = st.text_input("Código de invitación").upper()
         unirse = st.form_su_
+
 
 
 
