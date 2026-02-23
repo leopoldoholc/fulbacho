@@ -75,18 +75,10 @@ def login():
 
         auth_url = response.url
 
-        st.components.v1.html(
-            f"""
-            <script>
-                window.location.href = "{auth_url}";
-            </script>
-            """,
-            height=0,
-        )
+        st.link_button("👉 Continuar con Google", auth_url)
 
     except Exception as e:
         st.error(f"Error en login: {e}")
-
 
 def logout():
     supabase.auth.sign_out()
@@ -219,6 +211,7 @@ with t0:
     with st.form("unirse_grupo"):
         codigo_input = st.text_input("Código de invitación").upper()
         unirse = st.form_su_
+
 
 
 
