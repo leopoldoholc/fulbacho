@@ -170,21 +170,31 @@ def vista_grupos():
     st.divider()
 
     # Unirse a grupo
-    st.subheader("Unirse a Grupo")
+with st.form("unirse_grupo"):
+    codigo = st.text_input("Código de invitación")
+    unirse = st.form_submit_button("Unirse")
 
-    with st.form("unirse_grupo"):
-        codigo = st.text_input("Código de invitación")
-        unirse = st.form_submit_button("Unirse")
+    if unirse and codigo:
+        grupo = supabase.table("grupos") \
+            .select("id") \
+            .eq("codigo_invitacion", codigo) \
+            .execute()
 
-        if unirse and codigo:
-            grupo = supabase.table("grupos") \
-                .select("id") \
-                .eq("codigo_invitacion", codigo) \
+        if not grupo.data:
+            st.error("Código inválido")
+        else:
+            grupo_id = grupo.data[0]["id"]
+
+            # verificar si ya pertenece
+            existe = supabase.table("grupo_miembros") \
+                .select("*") \
+                .eq("grupo_id", grupo_id) \
+                .eq("usuario_id", user.id) \
                 .execute()
 
-            if grupo.data:
-                grupo_id = grupo.data[0]["id"]
-
+            if existe.data:
+                st.warning("Ya pertenecés a este grupo.")
+            else:
                 supabase.table("grupo_miembros").insert({
                     "grupo_id": grupo_id,
                     "usuario_id": user.id,
@@ -193,8 +203,6 @@ def vista_grupos():
 
                 st.success("Te uniste al grupo!")
                 st.rerun()
-            else:
-                st.error("Código inválido")
 
 
 def vista_perfil():
@@ -206,9 +214,22 @@ def vista_perfil():
         .single() \
         .execute()
 
-    st.write("Nombre:", datos.data["nombre"])
-    st.write("Email:", datos.data["email"])
-    st.write("Posiciones preferidas:", datos.data["posiciones_preferidas"])
+    nombre = st.text_input("Nombre", value=datos.data["nombre"])
+
+    posiciones = st.multiselect(
+        "Posiciones preferidas",
+        ["Arquero", "Defensor", "Mediocampista", "Delantero"],
+        default=datos.data["posiciones_preferidas"]
+    )
+
+    if st.button("Guardar cambios"):
+        supabase.table("usuarios").update({
+            "nombre": nombre,
+            "posiciones_preferidas": posiciones
+        }).eq("id", user.id).execute()
+
+        st.success("Perfil actualizado")
+        st.rerun()
 
 
 def vista_jugadores():
