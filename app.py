@@ -20,11 +20,16 @@ supabase = init_connection()
 def generar_codigo():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
+# Mapeo de Emojis por Color
+EMOJIS_COLORES = {
+    "Azul": "🔵", "Rojo": "🔴", "Blanco": "⚪", "Negro": "⚫", 
+    "Verde": "🟢", "Amarillo": "🟡", "Naranja": "🟠", "Violeta": "🟣"
+}
+
 # =====================================================
-# 🔐 AUTH & SESSION
+# 🔐 AUTH & SESSION (Sin cambios)
 # =====================================================
-if "user" not in st.session_state:
-    st.session_state.user = None
+if "user" not in st.session_state: st.session_state.user = None
 
 def manejar_oauth():
     query_params = st.query_params
@@ -33,47 +38,23 @@ def manejar_oauth():
         try:
             supabase.auth.exchange_code_for_session({"auth_code": code})
             session = supabase.auth.get_session()
-            if session and session.user:
-                st.session_state.user = session.user
+            if session and session.user: st.session_state.user = session.user
             st.query_params.clear()
             st.rerun()
-        except:
-            pass
-
-def login():
-    response = supabase.auth.sign_in_with_oauth({
-        "provider": "google",
-        "options": {"redirect_to": "https://fulbacho.streamlit.app"}
-    })
-    st.link_button("👉 Continuar con Google", response.url)
-
-def logout():
-    supabase.auth.sign_out()
-    st.session_state.user = None
-    st.rerun()
+        except: pass
 
 manejar_oauth()
-
 if not st.session_state.user:
     st.title("⚽ Fulbacho Pro")
-    st.subheader("Gestión de equipos y partidos")
     if st.button("Iniciar sesión con Google", type="primary"):
-        login()
+        response = supabase.auth.sign_in_with_oauth({
+            "provider": "google",
+            "options": {"redirect_to": "https://fulbacho.streamlit.app"}
+        })
+        st.link_button("👉 Continuar con Google", response.url)
     st.stop()
 
 user = st.session_state.user
-
-# Sync de usuario inicial
-try:
-    existing = supabase.table("usuarios").select("*").eq("id", user.id).execute()
-    if not existing.data:
-        supabase.table("usuarios").insert({
-            "id": user.id,
-            "nombre": user.user_metadata.get("full_name", user.email),
-            "email": user.email
-        }).execute()
-except:
-    pass
 
 # =====================================================
 # 🏟️ VISTA GRUPOS
@@ -89,7 +70,7 @@ def vista_grupos():
             if not g: continue
             with cols[i % 2]:
                 with st.container(border=True):
-                    st.subheader(g['nombre'])
+                    st.subheader(f"🏆 {g['nombre']}")
                     st.caption(f"Modalidad: {g.get('tipo_cancha', 'N/A')} | Rol: {item['rol']}")
                     st.code(f"Código: {g['codigo_invitacion']}")
     else:
@@ -142,22 +123,25 @@ def vista_perfil():
             st.success("¡Guardado!")
 
 # =====================================================
-# ⚙️ VISTA ADMIN
-# =====================================
+# ⚙️ VISTA ADMIN (Configuración de Colores)
+# =====================================================
 def vista_admin():
     st.header("⚙️ Admin")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
-        st.warning("No sos admin.")
+        st.warning("No sos admin de ningún grupo.")
         return
-    opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
     
-    t1, t2 = st.tabs(["👥 Miembros", "➕ Invitados"])
+    opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
+    g_sel = st.selectbox("Elegí el grupo para configurar:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
+    
+    t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "🎨 Estética"])
+    
     with t1:
         miembros = supabase.table("grupo_miembros").select("rol, usuarios(nombre, email)").eq("grupo_id", g_sel).execute()
         for m in miembros.data:
             st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
+    
     with t2:
         with st.form("inv"):
             inv_n = st.text_input("Nombre Invitado")
@@ -166,54 +150,80 @@ def vista_admin():
                 if res.data:
                     supabase.table("grupo_miembros").insert({"grupo_id": g_sel, "usuario_id": res.data[0]['id'], "rol": "invitado"}).execute()
                     st.rerun()
+    
+    with t3:
+        st.subheader("Configuración de Equipos")
+        # Por ahora lo guardamos en session_state para la prueba, luego iría a la tabla Grupos
+        if f"color_a_{g_sel}" not in st.session_state: st.session_state[f"color_a_{g_sel}"] = "Azul"
+        if f"color_b_{g_sel}" not in st.session_state: st.session_state[f"color_b_{g_sel}"] = "Rojo"
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.session_state[f"color_a_{g_sel}"] = st.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(st.session_state[f"color_a_{g_sel}"]))
+        with c2:
+            st.session_state[f"color_b_{g_sel}"] = st.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(st.session_state[f"color_b_{g_sel}"]))
+        st.success("Configuración de colores lista para el próximo partido.")
 
 # =====================================================
-# 📅 VISTA PARTIDOS
+# 📅 VISTA PARTIDOS (Visual & WhatsApp Pro)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
-        st.info("Sección para administradores de grupo.")
+        st.info("Solo los administradores pueden armar equipos.")
         return
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
     g_sel = st.selectbox("Elegí el grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
     
+    # Obtener colores configurados
+    col_a = st.session_state.get(f"color_a_{g_sel}", "Azul")
+    col_b = st.session_state.get(f"color_b_{g_sel}", "Rojo")
+    emo_a = EMOJIS_COLORES[col_a]
+    emo_b = EMOJIS_COLORES[col_b]
+
     res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre)").eq("grupo_id", g_sel).execute()
     j_disp = [m['usuarios'] for m in res_m.data if m['usuarios']]
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.subheader("🙋‍♂️ ¿Quiénes juegan?")
+        st.subheader("🙋‍♂️ Convocados")
         conv = []
         for j in j_disp:
             if st.checkbox(j['nombre'], key=f"c{j['id']}"): conv.append(j)
     
     with col2:
         if len(conv) < 2:
-            st.info("Seleccioná al menos 2 pibes.")
+            st.info("Elegí a los pibes para armar el partido.")
         else:
-            st.subheader("⚖️ Nivelación manual")
+            st.subheader("⚖️ Nivelación")
             niv = {}
             for c in conv:
                 niv[c['id']] = st.slider(f"Nivel {c['nombre']}", 1, 10, 5, key=f"l{c['id']}")
             
-            if st.button("🪄 Armar Equipos", type="primary"):
+            if st.button("🪄 Generar Equipos", type="primary"):
                 orden = sorted(conv, key=lambda x: niv[x['id']], reverse=True)
                 ea, eb = [], []
                 for i, jug in enumerate(orden):
                     (ea if i % 2 == 0 else eb).append(jug)
                 
+                st.divider()
                 ca, cb = st.columns(2)
-                ca.success("🔵 EQUIPO A")
-                for x in ea: ca.write(f"🏃 {x['nombre']}")
-                cb.error("🔴 EQUIPO B")
-                for x in eb: cb.write(f"🏃 {x['nombre']}")
+                with ca:
+                    st.markdown(f"### {emo_a} EQUIPO {col_a.upper()}")
+                    for x in ea: st.write(f"🏃 {x['nombre']}")
+                with cb:
+                    st.markdown(f"### {emo_b} EQUIPO {col_b.upper()}")
+                    for x in eb: st.write(f"🏃 {x['nombre']}")
                 
-                msg = f"⚽ *Equipos*\n\n🔵 A:\n" + "\n".join([f"- {j['nombre']}" for j in ea])
-                msg += f"\n\n🔴 B:\n" + "\n".join([f"- {j['nombre']}" for j in eb])
-                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
+                # Mensaje de WhatsApp mejorado
+                msg = f"⚽ *¡HAY FULBACHO!* ⚽\n\n"
+                msg += f"{emo_a} *EQUIPO {col_a.upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in ea])
+                msg += f"\n\n{emo_b} *EQUIPO {col_b.upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in eb])
+                msg += f"\n\n📍 _¡Nos vemos en la cancha!_"
+                
+                st.link_button("📲 Mandar al grupo de WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
 
 # =====================================================
 # 🎛️ MAIN
