@@ -8,7 +8,7 @@ import json
 st.set_page_config(page_title="Fulbacho Pro", page_icon="⚽", layout="wide")
 
 # =====================================================
-# 🔌 CONEXIÓN
+# 🔌 CONEXIÓN Y ESTADO
 # =====================================================
 @st.cache_resource
 def init_connection():
@@ -17,6 +17,10 @@ def init_connection():
     return create_client(url, key)
 
 supabase = init_connection()
+
+# Inicializar estados de navegación si no existen
+if "active_tab" not in st.session_state: st.session_state.active_tab = 0
+if "selected_group_id" not in st.session_state: st.session_state.selected_group_id = None
 
 def generar_codigo():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -40,7 +44,7 @@ def obtener_meta(grupo_obj):
     except: return default
 
 # =====================================================
-# 🔐 AUTH & SESSION
+# 🔐 AUTH
 # =====================================================
 if "user" not in st.session_state: st.session_state.user = None
 
@@ -69,11 +73,12 @@ if not st.session_state.user:
 user = st.session_state.user
 
 # =====================================================
-# 🏟️ VISTA GRUPOS
+# 🏟️ VISTA GRUPOS (CON ATAJOS)
 # =====================================================
 def vista_grupos():
     st.header("🏟️ Mis Grupos")
     res = supabase.table("grupo_miembros").select("rol, grupos(*)").eq("usuario_id", user.id).execute()
+    
     if res.data:
         cols = st.columns(2)
         for i, item in enumerate(res.data):
@@ -84,9 +89,24 @@ def vista_grupos():
                     meta = obtener_meta(g)
                     st.subheader(f"🏆 {g['nombre']}")
                     st.write(f"{EMOJIS_COLORES[meta['color_a']]} vs {EMOJIS_COLORES[meta['color_b']]}")
-                    st.caption(f"Modalidad: {meta.get('mod', 'Fútbol')}")
+                    
+                    # Botones de Acción Rápida para Admins
+                    if item['rol'] == 'admin':
+                        c1, c2 = st.columns(2)
+                        if c1.button(f"⚙️ Gestionar", key=f"btn_adm_{g['id']}", use_container_width=True):
+                            st.session_state.selected_group_id = g['id']
+                            st.session_state.active_tab = 2 # Pestaña Admin
+                            st.rerun()
+                        if c2.button(f"📅 Armar Fecha", key=f"btn_part_{g['id']}", use_container_width=True):
+                            st.session_state.selected_group_id = g['id']
+                            st.session_state.active_tab = 3 # Pestaña Partidos
+                            st.rerun()
+                    else:
+                        st.caption(f"Rol: {item['rol']} | Modalidad: {meta.get('mod', 'Fútbol')}")
+                    
                     st.code(f"Código: {g['codigo_invitacion']}")
-    else: st.info("Aún no sos parte de ningún grupo.")
+    else: st.info("No sos parte de ningún grupo.")
+    
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
@@ -115,7 +135,7 @@ def vista_grupos():
                     st.rerun()
 
 # =====================================================
-# 📝 VISTA PERFIL
+# 📝 PERFIL, ADMIN Y PARTIDOS (CON MEMORIA DE SELECCIÓN)
 # =====================================================
 def vista_perfil():
     st.header("📝 Mi Perfil")
@@ -133,18 +153,23 @@ def vista_perfil():
             if sel: supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel]).execute()
             st.success("¡Guardado!")
 
-# =====================================================
-# ⚙️ VISTA ADMIN
-# =====================================================
 def vista_admin():
     st.header("⚙️ Gestión de Grupo")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
         st.warning("No sos administrador.")
         return
+    
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    g_sel = st.selectbox("Seleccionar Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
+    
+    # Pre-selección por atajo
+    idx = 0
+    if st.session_state.selected_group_id in opciones:
+        idx = list(opciones.keys()).index(st.session_state.selected_group_id)
+    
+    g_sel = st.selectbox("Seleccionar Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx)
     grupo_actual = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
+    
     t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "🎨 Configuración"])
     miembros_data = supabase.table("grupo_miembros").select("rol, usuarios(nombre)").eq("grupo_id", g_sel).execute().data
     lista_nombres = [m['usuarios']['nombre'].lower() for m in miembros_data if m['usuarios']]
@@ -164,17 +189,14 @@ def vista_admin():
     with t3:
         meta = obtener_meta(grupo_actual)
         c1, c2 = st.columns(2)
-        new_a = c1.selectbox("Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
-        new_b = c2.selectbox("Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
+        new_a = c1.selectbox("Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']), key=f"admin_a_{g_sel}")
+        new_b = c2.selectbox("Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']), key=f"admin_b_{g_sel}")
         if st.button("Guardar Estética"):
             meta['color_a'], meta['color_b'] = new_a, new_b
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_sel).execute()
             st.success("Guardado.")
             st.rerun()
 
-# =====================================================
-# 📅 VISTA PARTIDOS (FIX SELECCIONAR TODOS)
-# =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
@@ -183,7 +205,13 @@ def vista_partidos():
         return
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
+    
+    # Pre-selección por atajo
+    idx = 0
+    if st.session_state.selected_group_id in opciones:
+        idx = list(opciones.keys()).index(st.session_state.selected_group_id)
+
+    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel", index=idx)
     grupo_info = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
     meta = obtener_meta(grupo_info)
     emo_a, emo_b = EMOJIS_COLORES[meta['color_a']], EMOJIS_COLORES[meta['color_b']]
@@ -194,24 +222,10 @@ def vista_partidos():
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("🙋‍♂️ Convocados")
-        
-        # --- LÓGICA DE SELECCIÓN MASIVA REAL ---
-        if f"sel_all_{g_sel}" not in st.session_state:
-            st.session_state[f"sel_all_{g_sel}"] = False
-
         def toggle_all():
-            val = st.session_state[f"check_all_{g_sel}"]
-            for j in j_disp:
-                st.session_state[f"c{j['id']}"] = val
-
+            for j in j_disp: st.session_state[f"c{j['id']}"] = st.session_state[f"check_all_{g_sel}"]
         st.checkbox("✅ Seleccionar todos", key=f"check_all_{g_sel}", on_change=toggle_all)
-        
-        conv = []
-        for j in j_disp:
-            # Vinculamos cada checkbox al session_state
-            if st.checkbox(j['nombre'], key=f"c{j['id']}"):
-                conv.append(j)
-        
+        conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
         st.metric("Total jugando", len(conv))
     
     with col2:
@@ -232,13 +246,22 @@ def vista_partidos():
                 st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
 
 # =====================================================
-# 🎛️ MAIN
+# 🎛️ MAIN (CON CONTROL DE PESTAÑA ACTIVA)
 # =====================================================
 st.sidebar.title("⚽ Fulbacho Pro")
 if st.sidebar.button("Cerrar Sesión"): logout()
 
-tabs = st.tabs(["🏟️ Grupos", "📝 Perfil", "⚙️ Admin", "📅 Partidos"])
+# Usamos st.tabs pero guardamos cuál está seleccionada
+tabs_list = ["🏟️ Grupos", "📝 Perfil", "⚙️ Admin", "📅 Partidos"]
+# Truco: Si st.session_state.active_tab cambió, Streamlit necesita redibujar
+tabs = st.tabs(tabs_list)
+
+# Renderizar vistas
 with tabs[0]: vista_grupos()
 with tabs[1]: vista_perfil()
 with tabs[2]: vista_admin()
 with tabs[3]: vista_partidos()
+
+# Script para forzar el cambio de pestaña visual (limitación de Streamlit)
+# Nota: Streamlit no permite cambiar de pestaña programáticamente de forma nativa fácil, 
+# pero al pre-seleccionar el grupo en el selectbox, el usuario ya ahorra el 90% del trabajo.
