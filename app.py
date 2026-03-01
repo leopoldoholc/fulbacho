@@ -23,13 +23,15 @@ def generar_codigo():
 # Mapeo de Emojis por Color
 EMOJIS_COLORES = {
     "Azul": "🔵", "Rojo": "🔴", "Blanco": "⚪", "Negro": "⚫", 
-    "Verde": "🟢", "Amarillo": "🟡", "Naranja": "🟠", "Violeta": "🟣"
+    "Verde": "🟢", "Amarillo": "🟡", "Naranja": "🟠", "Violeta": "🟣", "Celeste": "👕"
 }
 
 # =====================================================
-# 🔐 AUTH & SESSION (Sin cambios)
+# 🔐 AUTH & SESSION
 # =====================================================
 if "user" not in st.session_state: st.session_state.user = None
+# Diccionario para persistir colores por grupo durante la sesión (luego a DB)
+if "config_grupos" not in st.session_state: st.session_state.config_grupos = {}
 
 def manejar_oauth():
     query_params = st.query_params
@@ -56,6 +58,15 @@ if not st.session_state.user:
 
 user = st.session_state.user
 
+# Sync de usuario
+try:
+    existing = supabase.table("usuarios").select("*").eq("id", user.id).execute()
+    if not existing.data:
+        supabase.table("usuarios").insert({
+            "id": user.id, "nombre": user.user_metadata.get("full_name", user.email), "email": user.email
+        }).execute()
+except: pass
+
 # =====================================================
 # 🏟️ VISTA GRUPOS
 # =====================================================
@@ -70,7 +81,10 @@ def vista_grupos():
             if not g: continue
             with cols[i % 2]:
                 with st.container(border=True):
+                    # Recuperar colores si existen
+                    conf = st.session_state.config_grupos.get(g['id'], {"a": "Blanco", "b": "Negro"})
                     st.subheader(f"🏆 {g['nombre']}")
+                    st.write(f"{EMOJIS_COLORES[conf['a']]} vs {EMOJIS_COLORES[conf['b']]}")
                     st.caption(f"Modalidad: {g.get('tipo_cancha', 'N/A')} | Rol: {item['rol']}")
                     st.code(f"Código: {g['codigo_invitacion']}")
     else:
@@ -81,7 +95,7 @@ def vista_grupos():
     with c1:
         st.subheader("Crear Grupo")
         with st.form("crear_g"):
-            n = st.text_input("Nombre del grupo")
+            n = st.text_input("Nombre")
             res_mod = supabase.table("modalidades").select("*").execute()
             mods = {m['id']: m['nombre'] for m in res_mod.data} if res_mod.data else {1: "Fútbol 5"}
             m_id = st.selectbox("Modalidad", options=list(mods.keys()), format_func=lambda x: mods[x])
@@ -123,24 +137,24 @@ def vista_perfil():
             st.success("¡Guardado!")
 
 # =====================================================
-# ⚙️ VISTA ADMIN (Configuración de Colores)
+# ⚙️ VISTA ADMIN (Persistencia de Colores)
 # =====================================================
 def vista_admin():
-    st.header("⚙️ Admin")
+    st.header("⚙️ Configuración de Grupos")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
+    
     if not admin_g.data:
-        st.warning("No sos admin de ningún grupo.")
+        st.warning("No sos administrador de ningún grupo.")
         return
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    g_sel = st.selectbox("Elegí el grupo para configurar:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
+    g_sel = st.selectbox("Seleccionar Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
     
-    t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "🎨 Estética"])
+    t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "👕 Colores del Grupo"])
     
     with t1:
-        miembros = supabase.table("grupo_miembros").select("rol, usuarios(nombre, email)").eq("grupo_id", g_sel).execute()
-        for m in miembros.data:
-            st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
+        miembros = supabase.table("grupo_miembros").select("rol, usuarios(nombre)").eq("grupo_id", g_sel).execute()
+        for m in miembros.data: st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
     
     with t2:
         with st.form("inv"):
@@ -152,36 +166,41 @@ def vista_admin():
                     st.rerun()
     
     with t3:
-        st.subheader("Configuración de Equipos")
-        # Por ahora lo guardamos en session_state para la prueba, luego iría a la tabla Grupos
-        if f"color_a_{g_sel}" not in st.session_state: st.session_state[f"color_a_{g_sel}"] = "Azul"
-        if f"color_b_{g_sel}" not in st.session_state: st.session_state[f"color_b_{g_sel}"] = "Rojo"
+        st.subheader("Colores Fijos del Grupo")
+        st.info("Configurá esto una vez y se usará para todos los partidos de este grupo.")
+        
+        # Cargar configuración actual o default
+        if g_sel not in st.session_state.config_grupos:
+            st.session_state.config_grupos[g_sel] = {"a": "Blanco", "b": "Negro"}
         
         c1, c2 = st.columns(2)
         with c1:
-            st.session_state[f"color_a_{g_sel}"] = st.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(st.session_state[f"color_a_{g_sel}"]))
+            color_a = st.selectbox("Equipo A (ej: Casacas)", list(EMOJIS_COLORES.keys()), 
+                                 index=list(EMOJIS_COLORES.keys()).index(st.session_state.config_grupos[g_sel]["a"]), key="sel_a")
         with c2:
-            st.session_state[f"color_b_{g_sel}"] = st.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(st.session_state[f"color_b_{g_sel}"]))
-        st.success("Configuración de colores lista para el próximo partido.")
+            color_b = st.selectbox("Equipo B (ej: Pecheras)", list(EMOJIS_COLORES.keys()), 
+                                 index=list(EMOJIS_COLORES.keys()).index(st.session_state.config_grupos[g_sel]["b"]), key="sel_b")
+        
+        if st.button("Guardar Colores para este Grupo"):
+            st.session_state.config_grupos[g_sel] = {"a": color_a, "b": color_b}
+            st.success(f"¡Configurado! {EMOJIS_COLORES[color_a]} vs {EMOJIS_COLORES[color_b]}")
 
 # =====================================================
-# 📅 VISTA PARTIDOS (Visual & WhatsApp Pro)
+# 📅 VISTA PARTIDOS (Lector de Memoria de Grupo)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
-        st.info("Solo los administradores pueden armar equipos.")
+        st.info("Sección para administradores.")
         return
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    g_sel = st.selectbox("Elegí el grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
+    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
     
-    # Obtener colores configurados
-    col_a = st.session_state.get(f"color_a_{g_sel}", "Azul")
-    col_b = st.session_state.get(f"color_b_{g_sel}", "Rojo")
-    emo_a = EMOJIS_COLORES[col_a]
-    emo_b = EMOJIS_COLORES[col_b]
+    # Recuperar colores específicos de ESTE grupo
+    conf = st.session_state.config_grupos.get(g_sel, {"a": "Blanco", "b": "Negro"})
+    emo_a, emo_b = EMOJIS_COLORES[conf['a']], EMOJIS_COLORES[conf['b']]
 
     res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre)").eq("grupo_id", g_sel).execute()
     j_disp = [m['usuarios'] for m in res_m.data if m['usuarios']]
@@ -189,41 +208,32 @@ def vista_partidos():
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("🙋‍♂️ Convocados")
-        conv = []
-        for j in j_disp:
-            if st.checkbox(j['nombre'], key=f"c{j['id']}"): conv.append(j)
+        conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
     
     with col2:
-        if len(conv) < 2:
-            st.info("Elegí a los pibes para armar el partido.")
-        else:
+        if len(conv) >= 2:
             st.subheader("⚖️ Nivelación")
-            niv = {}
-            for c in conv:
-                niv[c['id']] = st.slider(f"Nivel {c['nombre']}", 1, 10, 5, key=f"l{c['id']}")
+            niv = {c['id']: st.slider(f"{c['nombre']}", 1, 10, 5, key=f"l{c['id']}") for c in conv}
             
-            if st.button("🪄 Generar Equipos", type="primary"):
+            if st.button("🪄 Armar Equipos", type="primary"):
                 orden = sorted(conv, key=lambda x: niv[x['id']], reverse=True)
                 ea, eb = [], []
-                for i, jug in enumerate(orden):
-                    (ea if i % 2 == 0 else eb).append(jug)
+                for i, jug in enumerate(orden): (ea if i % 2 == 0 else eb).append(jug)
                 
                 st.divider()
                 ca, cb = st.columns(2)
                 with ca:
-                    st.markdown(f"### {emo_a} EQUIPO {col_a.upper()}")
+                    st.markdown(f"### {emo_a} EQUIPO {conf['a'].upper()}")
                     for x in ea: st.write(f"🏃 {x['nombre']}")
                 with cb:
-                    st.markdown(f"### {emo_b} EQUIPO {col_b.upper()}")
+                    st.markdown(f"### {emo_b} EQUIPO {conf['b'].upper()}")
                     for x in eb: st.write(f"🏃 {x['nombre']}")
                 
-                # Mensaje de WhatsApp mejorado
-                msg = f"⚽ *¡HAY FULBACHO!* ⚽\n\n"
-                msg += f"{emo_a} *EQUIPO {col_a.upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in ea])
-                msg += f"\n\n{emo_b} *EQUIPO {col_b.upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in eb])
-                msg += f"\n\n📍 _¡Nos vemos en la cancha!_"
-                
-                st.link_button("📲 Mandar al grupo de WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
+                msg = f"⚽ *¡HAY FULBACHO EN {opciones[g_sel].upper()}!* ⚽\n\n"
+                msg += f"{emo_a} *EQUIPO {conf['a'].upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in ea])
+                msg += f"\n\n{emo_b} *EQUIPO {conf['b'].upper()}:*\n" + "\n".join([f"• {j['nombre']}" for j in eb])
+                msg += f"\n\n📍 _¡A transpirar la camiseta!_"
+                st.link_button("📲 Mandar por WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
 
 # =====================================================
 # 🎛️ MAIN
