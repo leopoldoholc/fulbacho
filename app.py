@@ -26,24 +26,18 @@ EMOJIS_COLORES = {
     "Verde": "🟢", "Amarillo": "🟡", "Naranja": "🟠", "Violeta": "🟣", "Celeste": "👕"
 }
 
-# --- FUNCIÓN DE SEGURIDAD PARA METADATOS ---
 def obtener_meta(grupo_obj):
-    """Extrae JSON de tipo_cancha de forma segura."""
     raw = grupo_obj.get('tipo_cancha', '')
     default = {"mod": str(raw), "color_a": "Blanco", "color_b": "Negro"}
-    if not raw:
-        return default
+    if not raw: return default
     try:
-        # Si es un JSON, lo parseamos
         data = json.loads(raw)
         if isinstance(data, dict):
-            # Aseguramos que tenga las llaves básicas
             for k in ["color_a", "color_b"]:
                 if k not in data: data[k] = default[k]
             return data
         return default
-    except:
-        return default
+    except: return default
 
 # =====================================================
 # 🔐 AUTH & SESSION
@@ -67,8 +61,7 @@ if not st.session_state.user:
     st.title("⚽ Fulbacho Pro")
     if st.button("Iniciar sesión con Google", type="primary"):
         response = supabase.auth.sign_in_with_oauth({
-            "provider": "google",
-            "options": {"redirect_to": "https://fulbacho.streamlit.app"}
+            "provider": "google", "options": {"redirect_to": "https://fulbacho.streamlit.app"}
         })
         st.link_button("👉 Continuar con Google", response.url)
     st.stop()
@@ -81,7 +74,6 @@ user = st.session_state.user
 def vista_grupos():
     st.header("🏟️ Mis Grupos")
     res = supabase.table("grupo_miembros").select("rol, grupos(*)").eq("usuario_id", user.id).execute()
-    
     if res.data:
         cols = st.columns(2)
         for i, item in enumerate(res.data):
@@ -94,9 +86,7 @@ def vista_grupos():
                     st.write(f"{EMOJIS_COLORES[meta['color_a']]} vs {EMOJIS_COLORES[meta['color_b']]}")
                     st.caption(f"Modalidad: {meta.get('mod', 'Fútbol')}")
                     st.code(f"Código: {g['codigo_invitacion']}")
-    else:
-        st.info("Aún no sos parte de ningún grupo.")
-
+    else: st.info("Aún no sos parte de ningún grupo.")
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
@@ -140,8 +130,7 @@ def vista_perfil():
         if st.button("Guardar"):
             supabase.table("usuarios").update({"nombre": nuevo_n}).eq("id", user.id).execute()
             supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
-            if sel:
-                supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel]).execute()
+            if sel: supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel]).execute()
             st.success("¡Guardado!")
 
 # =====================================================
@@ -150,24 +139,17 @@ def vista_perfil():
 def vista_admin():
     st.header("⚙️ Gestión de Grupo")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
-    
     if not admin_g.data:
         st.warning("No sos administrador.")
         return
-    
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
     g_sel = st.selectbox("Seleccionar Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
     grupo_actual = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
-
     t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "🎨 Configuración"])
-    
     miembros_data = supabase.table("grupo_miembros").select("rol, usuarios(nombre)").eq("grupo_id", g_sel).execute().data
     lista_nombres = [m['usuarios']['nombre'].lower() for m in miembros_data if m['usuarios']]
-
     with t1:
-        for m in miembros_data: 
-            st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
-    
+        for m in miembros_data: st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
     with t2:
         with st.form("inv", clear_on_submit=True):
             inv_n = st.text_input("Nombre del Jugador")
@@ -179,7 +161,6 @@ def vista_admin():
                     if res.data:
                         supabase.table("grupo_miembros").insert({"grupo_id": g_sel, "usuario_id": res.data[0]['id'], "rol": "invitado"}).execute()
                         st.rerun()
-    
     with t3:
         meta = obtener_meta(grupo_actual)
         c1, c2 = st.columns(2)
@@ -192,7 +173,7 @@ def vista_admin():
             st.rerun()
 
 # =====================================================
-# 📅 VISTA PARTIDOS
+# 📅 VISTA PARTIDOS (FIX SELECCIONAR TODOS)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
@@ -204,7 +185,6 @@ def vista_partidos():
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
     g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
     grupo_info = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
-
     meta = obtener_meta(grupo_info)
     emo_a, emo_b = EMOJIS_COLORES[meta['color_a']], EMOJIS_COLORES[meta['color_b']]
 
@@ -214,13 +194,29 @@ def vista_partidos():
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("🙋‍♂️ Convocados")
-        sel_all = st.checkbox("✅ Seleccionar todos")
-        conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}", value=sel_all)]
+        
+        # --- LÓGICA DE SELECCIÓN MASIVA REAL ---
+        if f"sel_all_{g_sel}" not in st.session_state:
+            st.session_state[f"sel_all_{g_sel}"] = False
+
+        def toggle_all():
+            val = st.session_state[f"check_all_{g_sel}"]
+            for j in j_disp:
+                st.session_state[f"c{j['id']}"] = val
+
+        st.checkbox("✅ Seleccionar todos", key=f"check_all_{g_sel}", on_change=toggle_all)
+        
+        conv = []
+        for j in j_disp:
+            # Vinculamos cada checkbox al session_state
+            if st.checkbox(j['nombre'], key=f"c{j['id']}"):
+                conv.append(j)
+        
         st.metric("Total jugando", len(conv))
     
     with col2:
         if len(conv) >= 2:
-            st.subheader("⚖️ Nivelación")
+            st.subheader("⚖️ Nivelación manual")
             niv = {c['id']: st.slider(f"{c['nombre']}", 1, 10, 5, key=f"l{c['id']}") for c in conv}
             if st.button("🪄 Armar Equipos", type="primary"):
                 orden = sorted(conv, key=lambda x: niv[x['id']], reverse=True)
