@@ -17,13 +17,14 @@ def init_connection():
 
 supabase = init_connection()
 
-# =====================================================
-# 🔐 AUTH & SYNC (Resumido para legibilidad)
-# =====================================================
-if "user" not in st.session_state: st.session_state.user = None
+def generar_codigo():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-# ... (Funciones manejar_oauth, login, logout que ya tenés funcionando) ...
-# [Mantené tus funciones de Auth aquí igual que antes]
+# =====================================================
+# 🔐 AUTH & SESSION
+# =====================================================
+if "user" not in st.session_state:
+    st.session_state.user = None
 
 def manejar_oauth():
     query_params = st.query_params
@@ -32,112 +33,196 @@ def manejar_oauth():
         try:
             supabase.auth.exchange_code_for_session({"auth_code": code})
             session = supabase.auth.get_session()
-            if session and session.user: st.session_state.user = session.user
+            if session and session.user:
+                st.session_state.user = session.user
             st.query_params.clear()
             st.rerun()
-        except: pass
+        except:
+            pass
+
+def login():
+    response = supabase.auth.sign_in_with_oauth({
+        "provider": "google",
+        "options": {"redirect_to": "https://fulbacho.streamlit.app"}
+    })
+    st.link_button("👉 Continuar con Google", response.url)
+
+def logout():
+    supabase.auth.sign_out()
+    st.session_state.user = None
+    st.rerun()
 
 manejar_oauth()
+
 if not st.session_state.user:
     st.title("⚽ Fulbacho Pro")
+    st.subheader("Gestión de equipos y partidos")
     if st.button("Iniciar sesión con Google", type="primary"):
-        import streamlit as st # Re-import necesario en algunos entornos
-        response = supabase.auth.sign_in_with_oauth({
-            "provider": "google",
-            "options": {"redirect_to": "https://fulbacho.streamlit.app"}
-        })
-        st.link_button("👉 Continuar con Google", response.url)
+        login()
     st.stop()
 
 user = st.session_state.user
 
+# Sync de usuario inicial
+try:
+    existing = supabase.table("usuarios").select("*").eq("id", user.id).execute()
+    if not existing.data:
+        supabase.table("usuarios").insert({
+            "id": user.id,
+            "nombre": user.user_metadata.get("full_name", user.email),
+            "email": user.email
+        }).execute()
+except:
+    pass
+
 # =====================================================
-# 🏟️ PESTAÑA PARTIDOS (NUEVA CORE)
+# 🏟️ VISTA GRUPOS
 # =====================================================
-def vista_partidos():
-    st.header("📅 Gestión de Partidos")
+def vista_grupos():
+    st.header("🏟️ Mis Grupos")
+    res = supabase.table("grupo_miembros").select("rol, grupos(*)").eq("usuario_id", user.id).execute()
     
-    # Seleccionar Grupo
-    admin_grupos = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre, tipo_cancha)").eq("usuario_id", user.id).eq("rol", "admin").execute()
-    
-    if not admin_grupos.data:
-        st.info("Creá un grupo en la pestaña 'Grupos' para empezar a armar partidos.")
-        return
-
-    opciones_g = {g['grupo_id']: g['grupos']['nombre'] for g in admin_grupos.data if g['grupos']}
-    g_sel = st.selectbox("Armar partido para:", options=list(opciones_g.keys()), format_func=lambda x: opciones_g[x], key="partido_g_sel")
-
-    # Traer Miembros del Grupo
-    res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre)").eq("grupo_id", g_sel).execute()
-    jugadores_disponibles = [m['usuarios'] for m in res_m.data if m['usuarios']]
-
-    if not jugadores_disponibles:
-        st.warning("No hay jugadores en este grupo.")
-        return
+    if res.data:
+        cols = st.columns(2)
+        for i, item in enumerate(res.data):
+            g = item['grupos']
+            if not g: continue
+            with cols[i % 2]:
+                with st.container(border=True):
+                    st.subheader(g['nombre'])
+                    st.caption(f"Modalidad: {g.get('tipo_cancha', 'N/A')} | Rol: {item['rol']}")
+                    st.code(f"Código: {g['codigo_invitacion']}")
+    else:
+        st.info("Aún no sos parte de ningún grupo.")
 
     st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Crear Grupo")
+        with st.form("crear_g"):
+            n = st.text_input("Nombre del grupo")
+            res_mod = supabase.table("modalidades").select("*").execute()
+            mods = {m['id']: m['nombre'] for m in res_mod.data} if res_mod.data else {1: "Fútbol 5"}
+            m_id = st.selectbox("Modalidad", options=list(mods.keys()), format_func=lambda x: mods[x])
+            if st.form_submit_button("Crear"):
+                if n:
+                    cod = generar_codigo()
+                    new = supabase.table("grupos").insert({"nombre": n, "tipo_cancha": mods[m_id], "codigo_invitacion": cod}).execute()
+                    if new.data:
+                        supabase.table("grupo_miembros").insert({"grupo_id": new.data[0]['id'], "usuario_id": user.id, "rol": "admin"}).execute()
+                        st.rerun()
+    with c2:
+        st.subheader("Unirse")
+        with st.form("unir_g"):
+            cod_in = st.text_input("Código")
+            if st.form_submit_button("Unirse"):
+                g_res = supabase.table("grupos").select("id").eq("codigo_invitacion", cod_in).execute()
+                if g_res.data:
+                    supabase.table("grupo_miembros").upsert({"grupo_id": g_res.data[0]['id'], "usuario_id": user.id, "rol": "miembro"}).execute()
+                    st.rerun()
+
+# =====================================================
+# 📝 VISTA PERFIL
+# =====================================================
+def vista_perfil():
+    st.header("📝 Mi Perfil")
+    u_data = supabase.table("usuarios").select("*").eq("id", user.id).single().execute().data
+    with st.container(border=True):
+        nuevo_n = st.text_input("Nombre", value=u_data['nombre'])
+        pos_db = supabase.table("posiciones").select("*").execute().data or []
+        opciones = {p['id']: f"{p['nombre']} ({p['categoria']})" for p in pos_db}
+        actuales = supabase.table("usuario_posiciones").select("posicion_id").eq("usuario_id", user.id).execute()
+        ids_act = [a['posicion_id'] for a in actuales.data]
+        sel = st.multiselect("Posiciones", options=list(opciones.keys()), default=[p for p in ids_act if p in opciones], format_func=lambda x: opciones[x])
+        if st.button("Guardar"):
+            supabase.table("usuarios").update({"nombre": nuevo_n}).eq("id", user.id).execute()
+            supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
+            if sel:
+                supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel]).execute()
+            st.success("¡Guardado!")
+
+# =====================================================
+# ⚙️ VISTA ADMIN
+# =====================================
+def vista_admin():
+    st.header("⚙️ Admin")
+    admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
+    if not admin_g.data:
+        st.warning("No sos admin.")
+        return
+    opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
+    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x])
     
-    col_lista, col_equipos = st.columns([1, 2])
+    t1, t2 = st.tabs(["👥 Miembros", "➕ Invitados"])
+    with t1:
+        miembros = supabase.table("grupo_miembros").select("rol, usuarios(nombre, email)").eq("grupo_id", g_sel).execute()
+        for m in miembros.data:
+            st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
+    with t2:
+        with st.form("inv"):
+            inv_n = st.text_input("Nombre Invitado")
+            if st.form_submit_button("Agregar"):
+                res = supabase.table("usuarios").insert({"nombre": inv_n}).execute()
+                if res.data:
+                    supabase.table("grupo_miembros").insert({"grupo_id": g_sel, "usuario_id": res.data[0]['id'], "rol": "invitado"}).execute()
+                    st.rerun()
 
-    with col_lista:
-        st.subheader("🙋‍♂️ Convocados")
-        st.write("Seleccioná los 10/12 que juegan:")
-        convocados = []
-        for j in jugadores_disponibles:
-            if st.checkbox(j['nombre'], key=f"conv_{j['id']}"):
-                convocados.append(j)
-        
-        st.metric("Total convocados", len(convocados))
-
-    with col_equipos:
-        st.subheader("⚖️ Balance de Equipos")
-        
-        if len(convocados) < 2:
-            st.info("Seleccioná al menos 2 jugadores para dividir equipos.")
+# =====================================================
+# 📅 VISTA PARTIDOS
+# =====================================================
+def vista_partidos():
+    st.header("📅 Armado de Equipos")
+    admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(nombre)").eq("usuario_id", user.id).eq("rol", "admin").execute()
+    if not admin_g.data:
+        st.info("Sección para administradores de grupo.")
+        return
+    
+    opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
+    g_sel = st.selectbox("Elegí el grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], key="psel")
+    
+    res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre)").eq("grupo_id", g_sel).execute()
+    j_disp = [m['usuarios'] for m in res_m.data if m['usuarios']]
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader("🙋‍♂️ ¿Quiénes juegan?")
+        conv = []
+        for j in j_disp:
+            if st.checkbox(j['nombre'], key=f"c{j['id']}"): conv.append(j)
+    
+    with col2:
+        if len(conv) < 2:
+            st.info("Seleccioná al menos 2 pibes.")
         else:
-            # Simulamos un nivel para la prueba (Luego esto vendrá de la DB)
-            niveles = {}
-            for c in convocados:
-                niveles[c['id']] = st.slider(f"Nivel de {c['nombre']}", 1, 10, 5, key=f"lvl_{c['id']}")
-
-            if st.button("🪄 Armar Equipos Equilibrados", type="primary", use_container_width=True):
-                # Algoritmo de la serpiente (Snake Draft) simple
-                ordenados = sorted(convocados, key=lambda x: niveles[x['id']], reverse=True)
-                eq_a, eq_b = [], []
+            st.subheader("⚖️ Nivelación manual")
+            niv = {}
+            for c in conv:
+                niv[c['id']] = st.slider(f"Nivel {c['nombre']}", 1, 10, 5, key=f"l{c['id']}")
+            
+            if st.button("🪄 Armar Equipos", type="primary"):
+                orden = sorted(conv, key=lambda x: niv[x['id']], reverse=True)
+                ea, eb = [], []
+                for i, jug in enumerate(orden):
+                    (ea if i % 2 == 0 else eb).append(jug)
                 
-                for i, jug in enumerate(ordenados):
-                    if i % 2 == 0: eq_a.append(jug)
-                    else: eq_b.append(jug)
+                ca, cb = st.columns(2)
+                ca.success("🔵 EQUIPO A")
+                for x in ea: ca.write(f"🏃 {x['nombre']}")
+                cb.error("🔴 EQUIPO B")
+                for x in eb: cb.write(f"🏃 {x['nombre']}")
                 
-                # Visualización
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.success(f"🔵 EQUIPO A (Suma: {sum(niveles[j['id']] for j in eq_a)})")
-                    for x in eq_a: st.write(f"🏃 {x['nombre']}")
-                with c2:
-                    st.error(f"🔴 EQUIPO B (Suma: {sum(niveles[j['id']] for j in eq_b)})")
-                    for x in eq_b: st.write(f"🏃 {x['nombre']}")
-                
-                # Botón de WhatsApp
-                txt_a = "\n".join([f"- {j['nombre']}" for j in eq_a])
-                txt_b = "\n".join([f"- {j['nombre']}" for j in eq_b])
-                mensaje = f"⚽ *FULBACHO CONFIRMADO*\n\n🔵 *EQUIPO A:*\n{txt_a}\n\n🔴 *EQUIPO B:*\n{txt_b}"
-                st.link_button("📲 Enviar equipos por WhatsApp", f"https://wa.me/?text={urllib.parse.quote(mensaje)}")
+                msg = f"⚽ *Equipos*\n\n🔵 A:\n" + "\n".join([f"- {j['nombre']}" for j in ea])
+                msg += f"\n\n🔴 B:\n" + "\n".join([f"- {j['nombre']}" for j in eb])
+                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
 
 # =====================================================
-# [Mantené tus vistas_grupos, vista_perfil y vista_admin igual que antes]
+# 🎛️ MAIN
 # =====================================================
+st.sidebar.title("⚽ Fulbacho Pro")
+if st.sidebar.button("Cerrar Sesión"): logout()
 
-# (Agregué la pestaña de Partidos al final)
 tabs = st.tabs(["🏟️ Grupos", "📝 Perfil", "⚙️ Admin", "📅 Partidos"])
-with tabs[0]: 
-    # [Tu lógica de vista_grupos]
-    pass # Solo representativo, mantené tu código aquí
-with tabs[1]:
-    # [Tu lógica de vista_perfil]
-    pass
-with tabs[2]:
-    # [Tu lógica de vista_admin]
-    pass
-with tabs[3]:
-    vista_partidos()
+with tabs[0]: vista_grupos()
+with tabs[1]: vista_perfil()
+with tabs[2]: vista_admin()
+with tabs[3]: vista_partidos()
