@@ -281,7 +281,9 @@ def vista_partidos():
                 
                 # WhatsApp
                 msg = f"⚽ *FULBACHO: {opciones[g_sel].upper()}*\n\n*{meta['color_a'].upper()} {emo_a}:*\n" + "\n".join([f_text(j) for j in ea])
-                msg += f"\n\n*{meta['color_b'].upper()} {emo_b}:*\n" + "\n".join([f_text(j) for j in
+                msg += f"\n\n*{meta['color_b'].upper()} {emo_b}:*\n" + "\n".join([f_text(j) for j in eb])
+                st.link_button("📲 Enviar WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
+
 
 # =====================================================
 # 🎛️ NAVEGACIÓN Y RENDER
@@ -305,5 +307,6 @@ if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
 elif st.session_state.vista_actual == "📝 Perfil": vista_perfil()
 elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
+
 
 
