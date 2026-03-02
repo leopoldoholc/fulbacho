@@ -170,8 +170,9 @@ def vista_admin():
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_sel).execute()
             st.success("Colores guardados en la base de datos.")
 
+
 # =====================================================
-# 📅 VISTA PARTIDOS (v2.6 - BALANCE POR POSICIÓN)
+# 📅 VISTA PARTIDOS (v2.7 - POSICIONES AL VUELO)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos Inteligente")
@@ -182,26 +183,25 @@ def vista_partidos():
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
     idx = list(opciones.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opciones else 0
-    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx, key="psel_v26")
+    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx, key="psel_v27")
     
     grupo_info = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
     meta = obtener_meta(grupo_info)
     
-    # Traemos jugadores Y sus posiciones (con manejo de errores por si no tienen)
+    # Traemos jugadores y posiciones
     res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones(nombre)))").eq("grupo_id", g_sel).execute()
     
     j_disp = []
     for item in res_m.data:
         u = item.get('usuarios')
         if u:
-            # Extraemos las posiciones de forma segura
             pos_raw = u.get('usuario_posiciones', [])
-            posiciones = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
-            u['lista_pos'] = posiciones
-            u['es_arquero'] = any("Arquero" in p for p in posiciones)
+            pos_nombres = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
+            u['pos_perfil'] = pos_nombres
             j_disp.append(u)
     
     col1, col2 = st.columns([1, 1.5])
+    
     with col1:
         st.subheader("1. Convocados")
         def toggle():
@@ -211,61 +211,78 @@ def vista_partidos():
         conv = []
         for j in j_disp:
             label = j['nombre']
-            if j['lista_pos']: label += f" ({', '.join([p[:3].upper() for p in j['lista_pos']])})"
+            if j['pos_perfil']: label += f" ({', '.join([p[:3].upper() for p in j['pos_perfil']])})"
             if st.checkbox(label, key=f"c{j['id']}"):
                 conv.append(j)
         st.metric("Jugando", len(conv))
     
     with col2:
-        st.subheader("2. Nivelación")
+        st.subheader("2. Nivel y Posición")
         if not conv:
             st.warning("Seleccioná jugadores a la izquierda.")
         else:
-            niv = {c['id']: st.radio(f"Nivel {c['nombre']}", options=range(1,11), index=4, horizontal=True, key=f"l{c['id']}") for c in conv}
+            final_data = {} # Para guardar nivel y posición final de cada uno
+            POS_OPCIONES = ["Arquero", "Defensor", "Mediocampista", "Delantero"]
             
+            for c in conv:
+                with st.container(border=True):
+                    # Si no tiene posición, le pedimos una rápida
+                    pos_final = c['pos_perfil']
+                    if not pos_final:
+                        p_aux = st.radio(f"Posición de **{c['nombre']}**", POS_OPCIONES, horizontal=True, key=f"p_aux_{c['id']}")
+                        pos_final = [p_aux]
+                    else:
+                        st.write(f"🏃 **{c['nombre']}** ({', '.join(pos_final)})")
+                    
+                    # Nivel 1-clic
+                    n_val = st.radio(f"Nivel", options=range(1,11), index=4, horizontal=True, key=f"l_{c['id']}", label_visibility="collapsed")
+                    
+                    final_data[c['id']] = {
+                        "obj": c,
+                        "nivel": n_val,
+                        "posiciones": pos_final,
+                        "es_arq": any("Arquero" in p for p in pos_final)
+                    }
+            
+            st.divider()
             if st.button("🪄 Armar Equipos Balanceados", type="primary", use_container_width=True):
                 # --- LÓGICA DE BALANCEO ---
-                arqueros = [j for j in conv if j['es_arquero']]
-                jugadores_campo = [j for j in conv if not j['es_arquero']]
+                arq_list = [v for k, v in final_data.items() if v['es_arq']]
+                campo_list = [v for k, v in final_data.items() if not v['es_arq']]
                 
-                # Ordenar ambos grupos por nivel
-                arqueros = sorted(arqueros, key=lambda x: niv[x['id']], reverse=True)
-                jugadores_campo = sorted(jugadores_campo, key=lambda x: niv[x['id']], reverse=True)
+                # Ordenar por nivel
+                arq_list = sorted(arq_list, key=lambda x: x['nivel'], reverse=True)
+                campo_list = sorted(campo_list, key=lambda x: x['nivel'], reverse=True)
                 
                 ea, eb = [], []
                 
-                # 1. Repartir arqueros primero
-                for i, arq in enumerate(arqueros):
-                    if i % 2 == 0: ea.append(arq)
-                    else: eb.append(arq)
+                # Repartir Arqueros
+                for i, a in enumerate(arq_list):
+                    (ea if i % 2 == 0 else eb).append(a)
                 
-                # 2. Repartir el resto (serpiente para nivelar)
-                # Si el equipo A ya tiene más gente (por los arqueros), empezamos por el B
-                empezar_en_a = len(ea) <= len(eb)
+                # Repartir Campo (serpiente)
+                start_a = len(ea) <= len(eb)
+                for i, j in enumerate(campo_list):
+                    if (i % 2 == 0) == start_a: ea.append(j)
+                    else: eb.append(j)
                 
-                for i, jug in enumerate(jugadores_campo):
-                    if (i % 2 == 0) == empezar_en_a: ea.append(jug)
-                    else: eb.append(jug)
-                
-                # --- MOSTRAR RESULTADOS ---
+                # --- MOSTRAR ---
                 ca, cb = st.columns(2)
                 emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
                 
-                def format_nombre(j):
-                    pos = f" [{j['lista_pos'][0][:3].upper()}]" if j['lista_pos'] else ""
-                    return f"• {j['nombre']}{pos}"
+                def f_text(j_info):
+                    p_label = f" [{j_info['posiciones'][0][:3].upper()}]" if j_info['posiciones'] else ""
+                    return f"• {j_info['obj']['nombre']}{p_label}"
 
                 ca.success(f"{emo_a} EQUIPO A")
-                for x in ea: ca.write(format_nombre(x))
-                
+                for x in ea: ca.write(f_text(x))
                 cb.error(f"{emo_b} EQUIPO B")
-                for x in eb: cb.write(format_nombre(x))
+                for x in eb: cb.write(f_text(x))
                 
-                # --- WHATSAPP TÁCTICO ---
-                txt_a = "\n".join([format_nombre(j) for j in ea])
-                txt_b = "\n".join([format_nombre(j) for j in eb])
-                msg = f"⚽ *FULBACHO: {opciones[g_sel].upper()}*\n\n*{meta['color_a'].upper()} {emo_a}:*\n{txt_a}\n\n*{meta['color_b'].upper()} {emo_b}:*\n{txt_b}"
-                st.link_button("📲 Enviar a WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
+                # WhatsApp
+                msg = f"⚽ *FULBACHO: {opciones[g_sel].upper()}*\n\n*{meta['color_a'].upper()} {emo_a}:*\n" + "\n".join([f_text(j) for j in ea])
+                msg += f"\n\n*{meta['color_b'].upper()} {emo_b}:*\n" + "\n".join([f_text(j) for j in
+
 # =====================================================
 # 🎛️ NAVEGACIÓN Y RENDER
 # =====================================================
@@ -288,4 +305,5 @@ if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
 elif st.session_state.vista_actual == "📝 Perfil": vista_perfil()
 elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
+
 
