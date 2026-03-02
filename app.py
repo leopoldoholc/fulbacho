@@ -18,7 +18,6 @@ if "user" not in st.session_state: st.session_state.user = None
 if "vista_actual" not in st.session_state: st.session_state.vista_actual = "🏟️ Grupos"
 if "grupo_seleccionado" not in st.session_state: st.session_state.selected_group_id = None
 
-# Capturar invitación por URL (?unirse=CODIGO)
 if "unirse" in st.query_params:
     st.session_state.invitacion_pendiente = st.query_params["unirse"]
 
@@ -53,7 +52,7 @@ user = st.session_state.user
 # --- CHEQUEO DE PERFIL OBLIGATORIO ---
 def check_perfil_completo():
     try:
-        # Buscamos si el usuario tiene nombre y al menos una posición asociada
+        # Buscamos nombre y posiciones
         u = supabase.table("usuarios").select("nombre, usuario_posiciones(id)").eq("id", user.id).single().execute()
         if not u.data or not u.data.get('nombre') or not u.data.get('usuario_posiciones'):
             return False, u.data
@@ -63,35 +62,42 @@ def check_perfil_completo():
 perfil_ok, u_db = check_perfil_completo()
 
 if not perfil_ok:
-    st.warning("⚠️ ¡Bienvenido! Completá tu ficha de jugador para empezar.")
+    st.warning("⚠️ ¡Bienvenido! Configurá tu perfil de jugador.")
     with st.container(border=True):
         nuevo_n = st.text_input("Tu Nombre/Apodo", value=user.user_metadata.get("full_name", ""))
         
-        # Traemos todas las opciones de la tabla posiciones_config
+        # Intentamos traer de posiciones_config
         pos_cfg = supabase.table("posiciones_config").select("id, nombre_posicion").execute().data
         if pos_cfg:
             opciones_dict = {p['id']: p['nombre_posicion'] for p in pos_cfg}
             sel_p = st.multiselect("Tus Posiciones", list(opciones_dict.keys()), format_func=lambda x: opciones_dict[x])
             
-            if st.button("Guardar Perfil y Jugar 🚀", type="primary"):
+            if st.button("Guardar y Empezar 🚀", type="primary"):
                 if nuevo_n and sel_p:
-                    # 1. Upsert Usuario
-                    supabase.table("usuarios").upsert({"id": user.id, "nombre": nuevo_n, "email": user.email}).execute()
-                    # 2. Guardar Posiciones
-                    supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
-                    supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel_p]).execute()
-                    
-                    # 3. Auto-unión si hay invitación
-                    if "invitacion_pendiente" in st.session_state:
-                        cod = st.session_state.invitacion_pendiente
-                        gr = supabase.table("grupos").select("id").eq("codigo_invitacion", cod).execute()
-                        if gr.data:
-                            supabase.table("grupo_miembros").upsert({"grupo_id": gr.data[0]['id'], "usuario_id": user.id, "rol": "miembro"}).execute()
-                            del st.session_state.invitacion_pendiente
-                    st.rerun()
+                    try:
+                        # 1. Upsert Usuario
+                        supabase.table("usuarios").upsert({"id": user.id, "nombre": nuevo_n, "email": user.email}).execute()
+                        
+                        # 2. Guardar Posiciones con manejo de error específico
+                        supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
+                        
+                        # Intentamos insertar. Si falla, el bloque except atrapará el error de la DB
+                        supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel_p]).execute()
+                        
+                        # 3. Auto-unión
+                        if "invitacion_pendiente" in st.session_state:
+                            cod = st.session_state.invitacion_pendiente
+                            gr = supabase.table("grupos").select("id").eq("codigo_invitacion", cod).execute()
+                            if gr.data:
+                                supabase.table("grupo_miembros").upsert({"grupo_id": gr.data[0]['id'], "usuario_id": user.id, "rol": "miembro"}).execute()
+                                del st.session_state.invitacion_pendiente
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error de Base de Datos: {e}")
+                        st.info("💡 Tip: Es probable que la tabla 'usuario_posiciones' todavía apunte a la tabla vieja. Revisá las Foreign Keys en Supabase.")
                 else: st.error("Faltan datos.")
         else:
-            st.error("Error: No se encontraron posiciones configuradas en la base de datos.")
+            st.error("No se encontraron posiciones en 'posiciones_config'. ¿Corriste el script SQL?")
     st.stop()
 
 # --- UTILIDADES ---
@@ -130,7 +136,7 @@ def vista_grupos():
             with st.form("crear"):
                 n = st.text_input("Nombre Grupo")
                 mod = st.selectbox("Modalidad", ["Fútbol 5", "Fútbol 8"])
-                if st.form_submit_button("Crear"):
+                if st.form_submit_button("Crear Grupo"):
                     cod = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
                     meta_init = json.dumps({"mod": mod, "color_a": "Blanco", "color_b": "Negro"})
                     new = supabase.table("grupos").insert({"nombre": n, "tipo_cancha": meta_init, "codigo_invitacion": cod}).execute()
@@ -147,12 +153,12 @@ def vista_grupos():
                         st.rerun()
 
 # =====================================================
-# ⚙️ VISTA ADMIN (APB)
+# ⚙️ VISTA ADMIN
 # =====================================================
 def vista_admin():
     st.header("⚙️ Gestión")
     admin_res = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
-    if not admin_res.data: return st.info("No sos admin de ningún grupo.")
+    if not admin_res.data: return st.info("No sos admin.")
     
     opc = {g['grupo_id']: g['grupos']['nombre'] for g in admin_res.data}
     idx = list(opc.keys()).index(st.session_state.selected_group_id) if st.session_state.selected_group_id in opc else 0
@@ -165,7 +171,7 @@ def vista_admin():
     with t1:
         miemb = supabase.table("grupo_miembros").select("id, usuario_id, usuarios(nombre)").eq("grupo_id", g_id).execute().data
         for m in miemb:
-            c1, c2, c3 = st.columns([2, 1, 1])
+            c1, c2, c3 = st.columns([2, 0.5, 0.5])
             new_n = c1.text_input("Nombre", m['usuarios']['nombre'], key=f"e_{m['id']}", label_visibility="collapsed")
             if c2.button("💾", key=f"s_{m['id']}"):
                 supabase.table("usuarios").update({"nombre": new_n}).eq("id", m['usuario_id']).execute()
@@ -176,20 +182,20 @@ def vista_admin():
     with t2:
         meta = obtener_meta(g_act)
         c1, c2 = st.columns(2)
-        na = c1.selectbox("Color A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
-        nb = c2.selectbox("Color B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
-        if st.button("Guardar Estética"):
+        na = c1.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
+        nb = c2.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
+        if st.button("Guardar Config"):
             meta.update({"color_a": na, "color_b": nb})
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_id).execute()
             st.success("Guardado")
     with t3:
-        if st.checkbox("Confirmar borrar grupo definitivamente") and st.button("🔥 ELIMINAR"):
+        if st.checkbox("Confirmar borrar grupo") and st.button("ELIMINAR"):
             supabase.table("grupo_miembros").delete().eq("grupo_id", g_id).execute()
             supabase.table("grupos").delete().eq("id", g_id).execute()
             ir_a("🏟️ Grupos")
 
 # =====================================================
-# 📅 VISTA PARTIDOS (BALANCEO INTELIGENTE)
+# 📅 VISTA PARTIDOS
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
@@ -203,48 +209,39 @@ def vista_partidos():
     meta = obtener_meta(g_info)
     tipo_cancha = meta.get('mod', 'Fútbol 5')
     
-    # Carga posiciones válidas para esta cancha
     pos_cfg = supabase.table("posiciones_config").select("*").eq("tipo_cancha", tipo_cancha).execute().data
     nombres_validos = [p['nombre_posicion'] for p in pos_cfg]
     mapa_cats = {p['nombre_posicion']: p['categoria'] for p in pos_cfg}
 
-    # Carga jugadores
     res_j = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones_config(nombre_posicion)))").eq("grupo_id", g_id).execute()
     j_disp = []
     for item in res_j.data:
         u = item.get('usuarios')
         if u:
-            # Traer solo las posiciones del perfil que sirven para este tipo de cancha
             u['pos_perfil'] = [p['posiciones_config']['nombre_posicion'] for p in u.get('usuario_posiciones', []) if p.get('posiciones_config')]
             j_disp.append(u)
 
     col1, col2 = st.columns([1, 1.8])
     with col1:
         st.subheader("1. Convocados")
-        st.checkbox("Todos", key="all_v33", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v33}) for j in j_disp])
+        st.checkbox("Todos", key="all_v34", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v34}) for j in j_disp])
         conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
     
     with col2:
-        st.subheader("2. Táctica y Nivel")
-        if not conv: st.info("Marcá a los jugadores que vienen.")
-        else:
+        if conv:
             final = {}
             for c in conv:
                 with st.container(border=True):
                     c1, c2 = st.columns([1, 2])
-                    # Determinar posición por defecto (si la de su perfil sirve para esta cancha)
-                    match = next((p for p in c['pos_perfil'] if p in nombres_validos), nombres_validos[0])
+                    match = next((p for p in c['pos_perfil'] if p in nombres_validos), nombres_validos[0] if nombres_validos else "Delantero")
                     p_el = c1.selectbox(f"Pos {c['nombre']}", nombres_validos, index=nombres_validos.index(match), key=f"p_{c['id']}")
                     n_el = c2.radio(f"Nivel {c['nombre']}", range(1,11), index=4, horizontal=True, key=f"l_{c['id']}", label_visibility="collapsed")
-                    
                     cat = mapa_cats.get(p_el, "MID")
                     final[c['id']] = {"obj": c, "nivel": n_el, "pos": p_el, "cat": cat}
             
             if st.button("🪄 Armar Equipos", type="primary", use_container_width=True):
-                # Algoritmo de balanceo
                 arqs = sorted([v for v in final.values() if v['cat'] == "GK"], key=lambda x: x['nivel'], reverse=True)
                 resto = sorted([v for v in final.values() if v['cat'] != "GK"], key=lambda x: x['nivel'], reverse=True)
-                
                 ea, eb = [], []
                 for i, a in enumerate(arqs): (ea if i % 2 == 0 else eb).append(a)
                 start_a = len(ea) <= len(eb)
@@ -252,7 +249,6 @@ def vista_partidos():
                     if (i % 2 == 0) == start_a: ea.append(r)
                     else: eb.append(r)
                 
-                # Reporte
                 c1, c2 = st.columns(2)
                 emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
                 with c1:
@@ -264,13 +260,13 @@ def vista_partidos():
                 
                 msg = f"⚽ *FULBACHO {opc[g_id].upper()}*\n\n*A {emo_a}:*\n" + "\n".join([f"• {j['obj']['nombre']} ({j['pos'][:3].upper()})" for j in ea])
                 msg += f"\n\n*B {emo_b}:*\n" + "\n".join([f"• {j['obj']['nombre']} ({j['pos'][:3].upper()})" for j in eb])
-                st.link_button("📲 Enviar a WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
+                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
 
 # =====================================================
 # 🎛️ NAVEGACIÓN
 # =====================================================
 vistas = ["🏟️ Grupos", "⚙️ Admin", "📅 Partidos", "📝 Perfil"]
-nav = st.radio("Menu", vistas, index=vistas.index(st.session_state.vista_actual), horizontal=True, label_visibility="collapsed")
+nav = st.radio("M", vistas, index=vistas.index(st.session_state.vista_actual), horizontal=True, label_visibility="collapsed")
 if nav != st.session_state.vista_actual:
     st.session_state.vista_actual = nav
     st.rerun()
@@ -280,7 +276,7 @@ elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
 elif st.session_state.vista_actual == "📝 Perfil":
     st.header("📝 Perfil")
-    nn = st.text_input("Nombre", value=u_db['nombre'])
+    nn = st.text_input("Nombre", value=u_db['nombre'] if u_db else "")
     if st.button("Guardar"):
         supabase.table("usuarios").update({"nombre": nn}).eq("id", user.id).execute()
         st.success("Guardado")
