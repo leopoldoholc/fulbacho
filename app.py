@@ -172,118 +172,136 @@ def vista_admin():
 
 
 # =====================================================
-# 📅 VISTA PARTIDOS (v2.7 - POSICIONES AL VUELO)
+# 📅 VISTA PARTIDOS (v2.8 - LÓGICA TÁCTICA AVANZADA)
 # =====================================================
 def vista_partidos():
-    st.header("📅 Armado de Equipos Inteligente")
+    st.header("📅 Armado Táctico de Equipos")
+    
+    # 1. Obtención de datos básicos
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
         st.info("Sección para administradores.")
         return
     
-    opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    idx = list(opciones.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opciones else 0
-    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx, key="psel_v27")
+    opciones_g = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
+    idx = list(opciones_g.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opciones_g else 0
+    g_sel = st.selectbox("Grupo:", options=list(opciones_g.keys()), format_func=lambda x: opciones_g[x], index=idx, key="psel_v28")
     
     grupo_info = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
     meta = obtener_meta(grupo_info)
+    modalidad = meta.get('mod', 'F5') # F5, F6, F8, F11
     
-    # Traemos jugadores y posiciones
+    # 2. Definición de Posiciones según Cancha
+    # Mapeo: Posición -> Categoría de Balanceo
+    MAPEO_POS = {
+        "Arquero": "ARQ",
+        "Cierre": "DEF", "Ala": "MED", "Pivot": "DEL", # F5
+        "Defensor": "DEF", "Mediocampista": "MED", "Delantero": "DEL", # Gral
+        "Lateral": "DEF", "Volante": "MED", "Enganche": "MED" # F8/F11
+    }
+    
+    # Opciones que verá el Admin para elegir "al vuelo"
+    OPCIONES_VISTA = ["Arquero", "Defensor", "Mediocampista", "Delantero"]
+    if any(mod in modalidad for mod in ["8", "11"]):
+        OPCIONES_VISTA = ["Arquero", "Lateral", "Central", "Volante", "Enganche", "Delantero"]
+
+    # 3. Carga de Jugadores
     res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones(nombre)))").eq("grupo_id", g_sel).execute()
-    
     j_disp = []
     for item in res_m.data:
         u = item.get('usuarios')
         if u:
             pos_raw = u.get('usuario_posiciones', [])
-            pos_nombres = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
-            u['pos_perfil'] = pos_nombres
+            nombres = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
+            u['pos_perfil'] = nombres
             j_disp.append(u)
-    
-    col1, col2 = st.columns([1, 1.5])
+
+    col1, col2 = st.columns([1, 1.8])
     
     with col1:
         st.subheader("1. Convocados")
         def toggle():
-            for j in j_disp: st.session_state[f"c{j['id']}"] = st.session_state[f"all_{g_sel}"]
-        st.checkbox("Seleccionar todos", key=f"all_{g_sel}", on_change=toggle)
+            for j in j_disp: st.session_state[f"c{j['id']}"] = st.session_state[f"all_v28"]
+        st.checkbox("Seleccionar todos", key="all_v28", on_change=toggle)
         
-        conv = []
-        for j in j_disp:
-            label = j['nombre']
-            if j['pos_perfil']: label += f" ({', '.join([p[:3].upper() for p in j['pos_perfil']])})"
-            if st.checkbox(label, key=f"c{j['id']}"):
-                conv.append(j)
-        st.metric("Jugando", len(conv))
-    
+        conv = [j for j in j_disp if st.checkbox(f"{j['nombre']}", key=f"c{j['id']}")]
+        st.metric("Total", len(conv))
+
     with col2:
-        st.subheader("2. Nivel y Posición")
+        st.subheader("2. Ajuste de Posición y Nivel")
         if not conv:
-            st.warning("Seleccioná jugadores a la izquierda.")
+            st.info("Seleccioná jugadores para nivelar.")
         else:
-            final_data = {} # Para guardar nivel y posición final de cada uno
-            POS_OPCIONES = ["Arquero", "Defensor", "Mediocampista", "Delantero"]
-            
+            final_data = {}
             for c in conv:
                 with st.container(border=True):
-                    # Si no tiene posición, le pedimos una rápida
-                    pos_final = c['pos_perfil']
-                    if not pos_final:
-                        p_aux = st.radio(f"Posición de **{c['nombre']}**", POS_OPCIONES, horizontal=True, key=f"p_aux_{c['id']}")
-                        pos_final = [p_aux]
-                    else:
-                        st.write(f"🏃 **{c['nombre']}** ({', '.join(pos_final)})")
+                    # Lógica de posición por defecto
+                    pos_defecto = "Mediocampista"
+                    if c['pos_perfil']:
+                        # Buscamos la primera posición que coincida con nuestras opciones
+                        for p in c['pos_perfil']:
+                            if p in OPCIONES_VISTA:
+                                pos_defecto = p
+                                break
                     
-                    # Nivel 1-clic
-                    n_val = st.radio(f"Nivel", options=range(1,11), index=4, horizontal=True, key=f"l_{c['id']}", label_visibility="collapsed")
+                    c1, c2 = st.columns([1, 2])
+                    p_elegida = c1.selectbox(f"Pos. {c['nombre']}", OPCIONES_VISTA, 
+                                           index=OPCIONES_VISTA.index(pos_defecto) if pos_defecto in OPCIONES_VISTA else 0,
+                                           key=f"p_{c['id']}")
                     
+                    n_elegido = c2.select_slider(f"Nivel {c['nombre']}", options=range(1,11), value=5, key=f"l_{c['id']}", label_visibility="collapsed")
+                    
+                    # Categorización para el algoritmo
+                    cat = MAPEO_POS.get(p_elegida, "MED")
+                    if "Lateral" in p_elegida or "Central" in p_elegida: cat = "DEF"
+                    if "Volante" in p_elegida or "Enganche" in p_elegida: cat = "MED"
+
                     final_data[c['id']] = {
-                        "obj": c,
-                        "nivel": n_val,
-                        "posiciones": pos_final,
-                        "es_arq": any("Arquero" in p for p in pos_final)
+                        "nombre": c['nombre'],
+                        "nivel": n_elegido,
+                        "pos_label": p_elegida,
+                        "categoria": cat, # ARQ, DEF, MED, DEL
+                        "orden_peso": {"ARQ": 0, "DEF": 1, "MED": 2, "DEL": 3}.get(cat, 4)
                     }
-            
-            st.divider()
+
             if st.button("🪄 Armar Equipos Balanceados", type="primary", use_container_width=True):
-                # --- LÓGICA DE BALANCEO ---
-                arq_list = [v for k, v in final_data.items() if v['es_arq']]
-                campo_list = [v for k, v in final_data.items() if not v['es_arq']]
+                # --- BALANCEO ---
+                arqs = [v for v in final_data.values() if v['categoria'] == "ARQ"]
+                otros = [v for v in final_data.values() if v['categoria'] != "ARQ"]
                 
                 # Ordenar por nivel
-                arq_list = sorted(arq_list, key=lambda x: x['nivel'], reverse=True)
-                campo_list = sorted(campo_list, key=lambda x: x['nivel'], reverse=True)
+                arqs = sorted(arqs, key=lambda x: x['nivel'], reverse=True)
+                otros = sorted(otros, key=lambda x: x['nivel'], reverse=True)
                 
                 ea, eb = [], []
+                for i, a in enumerate(arqs): (ea if i % 2 == 0 else eb).append(a)
                 
-                # Repartir Arqueros
-                for i, a in enumerate(arq_list):
-                    (ea if i % 2 == 0 else eb).append(a)
-                
-                # Repartir Campo (serpiente)
                 start_a = len(ea) <= len(eb)
-                for i, j in enumerate(campo_list):
+                for i, j in enumerate(otros):
                     if (i % 2 == 0) == start_a: ea.append(j)
                     else: eb.append(j)
                 
-                # --- MOSTRAR ---
+                # --- MOSTRAR (Ordenado por ARQ > DEF > MED > DEL) ---
+                ea = sorted(ea, key=lambda x: x['orden_peso'])
+                eb = sorted(eb, key=lambda x: x['orden_peso'])
+                
                 ca, cb = st.columns(2)
-                emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
+                emo_a, emo_b = EMOJIS_COLORES.get(meta.get('color_a'), '⚪'), EMOJIS_COLORES.get(meta.get('color_b'), '⚫')
                 
-                def f_text(j_info):
-                    p_label = f" [{j_info['posiciones'][0][:3].upper()}]" if j_info['posiciones'] else ""
-                    return f"• {j_info['obj']['nombre']}{p_label}"
+                def f_line(j): return f"• **{j['nombre']}** ({j['pos_label'][:3].upper()})"
 
-                ca.success(f"{emo_a} EQUIPO A")
-                for x in ea: ca.write(f_text(x))
-                cb.error(f"{emo_b} EQUIPO B")
-                for x in eb: cb.write(f_text(x))
-                
+                with ca:
+                    st.success(f"{emo_a} EQUIPO A")
+                    for x in ea: st.write(f_line(x))
+                with cb:
+                    st.error(f"{emo_b} EQUIPO B")
+                    for x in eb: st.write(f_line(x))
+
                 # WhatsApp
-                msg = f"⚽ *FULBACHO: {opciones[g_sel].upper()}*\n\n*{meta['color_a'].upper()} {emo_a}:*\n" + "\n".join([f_text(j) for j in ea])
-                msg += f"\n\n*{meta['color_b'].upper()} {emo_b}:*\n" + "\n".join([f_text(j) for j in eb])
-                st.link_button("📲 Enviar WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
-
+                msg = f"⚽ *FULBACHO: {opciones_g[g_sel].upper()}*\n\n"
+                msg += f"*{meta.get('color_a', 'A').upper()} {emo_a}:*\n" + "\n".join([f_line(j) for j in ea])
+                msg += f"\n\n*{meta.get('color_b', 'B').upper()} {emo_b}:*\n" + "\n".join([f_line(j) for j in eb])
+                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
 
 # =====================================================
 # 🎛️ NAVEGACIÓN Y RENDER
@@ -307,6 +325,7 @@ if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
 elif st.session_state.vista_actual == "📝 Perfil": vista_perfil()
 elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
+
 
 
 
