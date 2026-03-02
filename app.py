@@ -171,10 +171,10 @@ def vista_admin():
             st.success("Colores guardados en la base de datos.")
 
 # =====================================================
-# 📅 VISTA PARTIDOS
+# 📅 VISTA PARTIDOS (v2.6 - BALANCE POR POSICIÓN)
 # =====================================================
 def vista_partidos():
-    st.header("📅 Armado de Equipos")
+    st.header("📅 Armado de Equipos Inteligente")
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
     if not admin_g.data:
         st.info("Sección para administradores.")
@@ -182,45 +182,90 @@ def vista_partidos():
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
     idx = list(opciones.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opciones else 0
-    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx, key="psel_final")
+    g_sel = st.selectbox("Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx, key="psel_v26")
     
     grupo_info = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
     meta = obtener_meta(grupo_info)
     
-    res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre)").eq("grupo_id", g_sel).execute()
-    j_disp = [m['usuarios'] for m in res_m.data if m['usuarios']]
+    # Traemos jugadores Y sus posiciones (con manejo de errores por si no tienen)
+    res_m = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones(nombre)))").eq("grupo_id", g_sel).execute()
+    
+    j_disp = []
+    for item in res_m.data:
+        u = item.get('usuarios')
+        if u:
+            # Extraemos las posiciones de forma segura
+            pos_raw = u.get('usuario_posiciones', [])
+            posiciones = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
+            u['lista_pos'] = posiciones
+            u['es_arquero'] = any("Arquero" in p for p in posiciones)
+            j_disp.append(u)
     
     col1, col2 = st.columns([1, 1.5])
     with col1:
         st.subheader("1. Convocados")
-        if f"all_{g_sel}" not in st.session_state: st.session_state[f"all_{g_sel}"] = False
         def toggle():
             for j in j_disp: st.session_state[f"c{j['id']}"] = st.session_state[f"all_{g_sel}"]
         st.checkbox("Seleccionar todos", key=f"all_{g_sel}", on_change=toggle)
-        conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
+        
+        conv = []
+        for j in j_disp:
+            label = j['nombre']
+            if j['lista_pos']: label += f" ({', '.join([p[:3].upper() for p in j['lista_pos']])})"
+            if st.checkbox(label, key=f"c{j['id']}"):
+                conv.append(j)
         st.metric("Jugando", len(conv))
     
     with col2:
-        st.subheader("2. Nivelación (1-clic)")
+        st.subheader("2. Nivelación")
         if not conv:
             st.warning("Seleccioná jugadores a la izquierda.")
         else:
             niv = {c['id']: st.radio(f"Nivel {c['nombre']}", options=range(1,11), index=4, horizontal=True, key=f"l{c['id']}") for c in conv}
-            if st.button("🪄 Armar Equipos", type="primary", use_container_width=True):
-                orden = sorted(conv, key=lambda x: niv[x['id']], reverse=True)
-                ea, eb = [], []
-                for i, jug in enumerate(orden): (ea if i % 2 == 0 else eb).append(jug)
+            
+            if st.button("🪄 Armar Equipos Balanceados", type="primary", use_container_width=True):
+                # --- LÓGICA DE BALANCEO ---
+                arqueros = [j for j in conv if j['es_arquero']]
+                jugadores_campo = [j for j in conv if not j['es_arquero']]
                 
+                # Ordenar ambos grupos por nivel
+                arqueros = sorted(arqueros, key=lambda x: niv[x['id']], reverse=True)
+                jugadores_campo = sorted(jugadores_campo, key=lambda x: niv[x['id']], reverse=True)
+                
+                ea, eb = [], []
+                
+                # 1. Repartir arqueros primero
+                for i, arq in enumerate(arqueros):
+                    if i % 2 == 0: ea.append(arq)
+                    else: eb.append(arq)
+                
+                # 2. Repartir el resto (serpiente para nivelar)
+                # Si el equipo A ya tiene más gente (por los arqueros), empezamos por el B
+                empezar_en_a = len(ea) <= len(eb)
+                
+                for i, jug in enumerate(jugadores_campo):
+                    if (i % 2 == 0) == empezar_en_a: ea.append(jug)
+                    else: eb.append(jug)
+                
+                # --- MOSTRAR RESULTADOS ---
                 ca, cb = st.columns(2)
                 emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
-                ca.success(f"{emo_a} EQUIPO A")
-                for x in ea: ca.write(f"• {x['nombre']}")
-                cb.error(f"{emo_b} EQUIPO B")
-                for x in eb: cb.write(f"• {x['nombre']}")
                 
-                msg = f"⚽ *EQUIPOS:* \n\n*A:* " + ", ".join([j['nombre'] for j in ea]) + "\n*B:* " + ", ".join([j['nombre'] for j in eb])
-                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
+                def format_nombre(j):
+                    pos = f" [{j['lista_pos'][0][:3].upper()}]" if j['lista_pos'] else ""
+                    return f"• {j['nombre']}{pos}"
 
+                ca.success(f"{emo_a} EQUIPO A")
+                for x in ea: ca.write(format_nombre(x))
+                
+                cb.error(f"{emo_b} EQUIPO B")
+                for x in eb: cb.write(format_nombre(x))
+                
+                # --- WHATSAPP TÁCTICO ---
+                txt_a = "\n".join([format_nombre(j) for j in ea])
+                txt_b = "\n".join([format_nombre(j) for j in eb])
+                msg = f"⚽ *FULBACHO: {opciones[g_sel].upper()}*\n\n*{meta['color_a'].upper()} {emo_a}:*\n{txt_a}\n\n*{meta['color_b'].upper()} {emo_b}:*\n{txt_b}"
+                st.link_button("📲 Enviar a WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
 # =====================================================
 # 🎛️ NAVEGACIÓN Y RENDER
 # =====================================================
@@ -243,3 +288,4 @@ if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
 elif st.session_state.vista_actual == "📝 Perfil": vista_perfil()
 elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
+
