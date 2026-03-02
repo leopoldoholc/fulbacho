@@ -2,7 +2,7 @@ import streamlit as st
 from supabase import create_client
 import random, string, urllib.parse, json
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIG ---
 st.set_page_config(page_title="Fulbacho Pro", page_icon="⚽", layout="wide")
 
 @st.cache_resource
@@ -13,10 +13,14 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- ESTADOS DE SESIÓN ---
+# --- ESTADOS ---
 if "user" not in st.session_state: st.session_state.user = None
 if "vista_actual" not in st.session_state: st.session_state.vista_actual = "🏟️ Grupos"
 if "grupo_seleccionado" not in st.session_state: st.session_state.grupo_seleccionado = None
+
+# Capturar invitación por URL
+if "unirse" in st.query_params:
+    st.session_state.invitacion_pendiente = st.query_params["unirse"]
 
 def ir_a(vista, grupo_id=None):
     st.session_state.vista_actual = vista
@@ -46,30 +50,45 @@ else:
 
 user = st.session_state.user
 
-# --- CHEQUEO DE PERFIL OBLIGATORIO ---
+# --- CHEQUEO DE PERFIL CON POSICIONES_CONFIG ---
 def check_perfil_completo():
     try:
         u = supabase.table("usuarios").select("nombre, usuario_posiciones(id)").eq("id", user.id).single().execute()
         if not u.data or not u.data.get('nombre') or not u.data.get('usuario_posiciones'):
             return False, u.data
         return True, u.data
-    except:
-        return False, None
+    except: return False, None
 
 perfil_ok, u_db = check_perfil_completo()
 
 if not perfil_ok:
-    st.warning("⚠️ ¡Bienvenido! Completá tu perfil para empezar a jugar.")
+    st.warning("⚠️ ¡Bienvenido! Configurá tu ficha de jugador.")
     with st.container(border=True):
-        nuevo_n = st.text_input("Tu Nombre/Apodo", value=u_db.get('nombre', '') if u_db else "")
-        pos_db = supabase.table("posiciones").select("*").execute().data or []
-        opciones_p = {p['id']: p['nombre'] for p in pos_db}
-        sel_p = st.multiselect("Posiciones", list(opciones_p.keys()), format_func=lambda x: opciones_p[x])
-        if st.button("Guardar y Entrar 🚀", type="primary"):
+        nuevo_n = st.text_input("Tu Nombre/Apodo", value=user.user_metadata.get("full_name", ""))
+        
+        # Traemos todas las posiciones únicas de la tabla de configuración
+        pos_cfg = supabase.table("posiciones_config").select("nombre_posicion").execute().data
+        opciones_p = sorted(list(set([p['nombre_posicion'] for p in pos_cfg])))
+        
+        sel_p = st.multiselect("Tus Posiciones", opciones_p)
+        
+        if st.button("Guardar Perfil y Empezar 🚀", type="primary"):
             if nuevo_n and sel_p:
-                supabase.table("usuarios").upsert({"id": user.id, "nombre": nuevo_n}).execute()
+                supabase.table("usuarios").upsert({"id": user.id, "nombre": nuevo_n, "email": user.email}).execute()
+                # OJO: Aquí vinculamos por nombre a la tabla posiciones si existe, o guardamos texto
+                # Para simplificar y usar tu config, buscamos los IDs que correspondan a esos nombres
+                res_ids = supabase.table("posiciones_config").select("id").in_("nombre_posicion", sel_p).execute().data
+                ids_finales = list(set([r['id'] for r in res_ids]))
+                
                 supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
-                supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel_p]).execute()
+                supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in ids_finales]).execute()
+                
+                if "invitacion_pendiente" in st.session_state:
+                    cod = st.session_state.invitacion_pendiente
+                    gr = supabase.table("grupos").select("id").eq("codigo_invitacion", cod).execute()
+                    if gr.data:
+                        supabase.table("grupo_miembros").upsert({"grupo_id": gr.data[0]['id'], "usuario_id": user.id, "rol": "miembro"}).execute()
+                        del st.session_state.invitacion_pendiente
                 st.rerun()
             else: st.error("Faltan datos.")
     st.stop()
@@ -78,7 +97,7 @@ if not perfil_ok:
 EMOJIS_COLORES = {"Azul": "🔵", "Rojo": "🔴", "Blanco": "⚪", "Negro": "⚫", "Verde": "🟢", "Amarillo": "🟡", "Naranja": "🟠", "Violeta": "🟣", "Celeste": "👕"}
 def obtener_meta(g):
     try: return json.loads(g.get('tipo_cancha', '{}'))
-    except: return {"mod": "F5", "color_a": "Blanco", "color_b": "Negro"}
+    except: return {"mod": "Fútbol 5", "color_a": "Blanco", "color_b": "Negro"}
 
 # =====================================================
 # 🏟️ VISTA GRUPOS
@@ -95,7 +114,7 @@ def vista_grupos():
                 with st.container(border=True):
                     meta = obtener_meta(g)
                     st.subheader(f"🏆 {g['nombre']}")
-                    st.write(f"{EMOJIS_COLORES.get(meta['color_a'], '⚪')} vs {EMOJIS_COLORES.get(meta['color_b'], '⚫')}")
+                    st.write(f"{EMOJIS_COLORES.get(meta.get('color_a'), '⚪')} vs {EMOJIS_COLORES.get(meta.get('color_b'), '⚫')}")
                     if item['rol'] == 'admin':
                         c1, c2 = st.columns(2)
                         if c1.button("⚙️ Config", key=f"g_adm_{g['id']}", use_container_width=True): ir_a("⚙️ Admin", g['id'])
@@ -108,9 +127,10 @@ def vista_grupos():
         with c1:
             with st.form("crear"):
                 n = st.text_input("Nombre Grupo")
+                mod = st.selectbox("Tipo de Cancha", ["Fútbol 5", "Fútbol 8"])
                 if st.form_submit_button("Crear"):
                     cod = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-                    meta_init = json.dumps({"mod": "F5", "color_a": "Blanco", "color_b": "Negro"})
+                    meta_init = json.dumps({"mod": mod, "color_a": "Blanco", "color_b": "Negro"})
                     new = supabase.table("grupos").insert({"nombre": n, "tipo_cancha": meta_init, "codigo_invitacion": cod}).execute()
                     if new.data:
                         supabase.table("grupo_miembros").insert({"grupo_id": new.data[0]['id'], "usuario_id": user.id, "rol": "admin"}).execute()
@@ -154,49 +174,54 @@ def vista_admin():
     with t2:
         meta = obtener_meta(g_act)
         c1, c2 = st.columns(2)
-        na = c1.selectbox("Color A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
-        nb = c2.selectbox("Color B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
+        na = c1.selectbox("Color A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta.get('color_a', 'Blanco')))
+        nb = c2.selectbox("Color B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta.get('color_b', 'Negro')))
         if st.button("Guardar Estética"):
             meta.update({"color_a": na, "color_b": nb})
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_id).execute()
             st.success("Guardado")
     with t3:
-        st.warning("Cuidado acá.")
-        c1 = st.checkbox("Confirmar borrar grupo")
-        if c1 and st.button("🔥 ELIMINAR TODO"):
+        if st.checkbox("Confirmar borrar grupo") and st.button("ELIMINAR DEFINITIVAMENTE"):
             supabase.table("grupo_miembros").delete().eq("grupo_id", g_id).execute()
             supabase.table("grupos").delete().eq("id", g_id).execute()
             ir_a("🏟️ Grupos")
 
 # =====================================================
-# 📅 VISTA PARTIDOS (BALANCEO TÁCTICO)
+# 📅 VISTA PARTIDOS (v3.2 - LÓGICA CONFIG_TABLE)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
     admin_res = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
-    if not admin_res.data: return st.info("No sos admin.")
+    if not admin_res.data: return
     
     opc = {g['grupo_id']: g['grupos']['nombre'] for g in admin_res.data}
     idx = list(opc.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opc else 0
     g_id = st.selectbox("Grupo:", list(opc.keys()), format_func=lambda x: opc[x], index=idx, key="p_sel")
     g_info = next(g['grupos'] for g in admin_res.data if g['grupo_id'] == g_id)
     meta = obtener_meta(g_info)
+    tipo_cancha_actual = meta.get('mod', 'Fútbol 5')
     
-    # Carga de jugadores con sus posiciones
-    res_j = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones(nombre)))").eq("grupo_id", g_id).execute()
+    # 1. Cargar opciones de posición según el tipo de cancha desde la tabla de config
+    posiciones_cfg = supabase.table("posiciones_config").select("*").eq("tipo_cancha", tipo_cancha_actual).execute().data
+    opciones_nombres = [p['nombre_posicion'] for p in posiciones_cfg]
+    mapa_categorias = {p['nombre_posicion']: p['categoria'] for p in posiciones_cfg}
+    
+    # 2. Carga de jugadores
+    res_j = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones_config(nombre_posicion)))").eq("grupo_id", g_id).execute()
     j_disp = []
     for item in res_j.data:
         u = item.get('usuarios')
         if u:
             pos_raw = u.get('usuario_posiciones', [])
-            nombres = [p['posiciones']['nombre'] for p in pos_raw if p.get('posiciones')]
+            # Buscamos nombres de posiciones que coincidan con la tabla de config
+            nombres = [p['posiciones_config']['nombre_posicion'] for p in pos_raw if p.get('posiciones_config')]
             u['pos_perfil'] = nombres
             j_disp.append(u)
 
     col1, col2 = st.columns([1, 1.8])
     with col1:
         st.subheader("1. Convocados")
-        st.checkbox("Todos", key="all_v3", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v3}) for j in j_disp])
+        st.checkbox("Todos", key="all_v32", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v32}) for j in j_disp])
         conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
     
     with col2:
@@ -204,14 +229,16 @@ def vista_partidos():
         if not conv: st.info("Seleccioná jugadores.")
         else:
             final = {}
-            OPC = ["Arquero", "Defensor", "Mediocampista", "Delantero"]
             for c in conv:
                 with st.container(border=True):
                     c1, c2 = st.columns([1, 2])
-                    pos_def = c['pos_perfil'][0] if c['pos_perfil'] else "Mediocampista"
-                    p_el = c1.selectbox(f"Pos {c['nombre']}", OPC, index=OPC.index(pos_def) if pos_def in OPC else 0, key=f"p_{c['id']}")
+                    # Pre-seleccionar si ya tiene una posición de perfil que sirva para esta cancha
+                    match = next((p for p in c['pos_perfil'] if p in opciones_nombres), opciones_nombres[0])
+                    p_el = c1.selectbox(f"Pos {c['nombre']}", opciones_nombres, index=opciones_nombres.index(match), key=f"p_{c['id']}")
                     n_el = c2.radio(f"Nivel {c['nombre']}", range(1,11), index=4, horizontal=True, key=f"l_{c['id']}", label_visibility="collapsed")
-                    final[c['id']] = {"obj": c, "nivel": n_el, "pos": p_el, "es_arq": p_el == "Arquero"}
+                    
+                    cat = mapa_categorias.get(p_el, "MID")
+                    final[c['id']] = {"obj": c, "nivel": n_el, "pos": p_el, "es_arq": cat == "GK", "orden": {"GK":0, "DEF":1, "MID":2, "FWD":3}.get(cat, 4)}
             
             if st.button("🪄 Armar", type="primary", use_container_width=True):
                 arqs = sorted([v for v in final.values() if v['es_arq']], key=lambda x: x['nivel'], reverse=True)
@@ -223,7 +250,10 @@ def vista_partidos():
                     if (i % 2 == 0) == start_a: ea.append(r)
                     else: eb.append(r)
                 
-                # Mostrar y WhatsApp
+                # Ordenar por posición para el reporte
+                ea = sorted(ea, key=lambda x: x['orden'])
+                eb = sorted(eb, key=lambda x: x['orden'])
+
                 c1, c2 = st.columns(2)
                 emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
                 with c1:
