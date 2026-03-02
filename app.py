@@ -52,7 +52,6 @@ user = st.session_state.user
 # --- CHEQUEO DE PERFIL OBLIGATORIO ---
 def check_perfil_completo():
     try:
-        # Buscamos nombre y posiciones
         u = supabase.table("usuarios").select("nombre, usuario_posiciones(id)").eq("id", user.id).single().execute()
         if not u.data or not u.data.get('nombre') or not u.data.get('usuario_posiciones'):
             return False, u.data
@@ -62,29 +61,24 @@ def check_perfil_completo():
 perfil_ok, u_db = check_perfil_completo()
 
 if not perfil_ok:
-    st.warning("⚠️ ¡Bienvenido! Configurá tu perfil de jugador.")
+    st.warning("⚠️ ¡Bienvenido! Configurá tu ficha de jugador.")
     with st.container(border=True):
         nuevo_n = st.text_input("Tu Nombre/Apodo", value=user.user_metadata.get("full_name", ""))
         
-        # Intentamos traer de posiciones_config
-        pos_cfg = supabase.table("posiciones_config").select("id, nombre_posicion").execute().data
+        # FILTRO: Solo mostramos posiciones de Fútbol 8 para el registro (las más completas)
+        pos_cfg = supabase.table("posiciones_config").select("id, nombre_posicion").eq("tipo_cancha", "Fútbol 8").execute().data
+        
         if pos_cfg:
             opciones_dict = {p['id']: p['nombre_posicion'] for p in pos_cfg}
-            sel_p = st.multiselect("Tus Posiciones", list(opciones_dict.keys()), format_func=lambda x: opciones_dict[x])
+            sel_p = st.multiselect("¿En qué posiciones jugás habitualmente?", list(opciones_dict.keys()), format_func=lambda x: opciones_dict[x])
             
-            if st.button("Guardar y Empezar 🚀", type="primary"):
+            if st.button("Guardar Perfil y Empezar ⚽", type="primary"):
                 if nuevo_n and sel_p:
                     try:
-                        # 1. Upsert Usuario
                         supabase.table("usuarios").upsert({"id": user.id, "nombre": nuevo_n, "email": user.email}).execute()
-                        
-                        # 2. Guardar Posiciones con manejo de error específico
                         supabase.table("usuario_posiciones").delete().eq("usuario_id", user.id).execute()
-                        
-                        # Intentamos insertar. Si falla, el bloque except atrapará el error de la DB
                         supabase.table("usuario_posiciones").insert([{"usuario_id": user.id, "posicion_id": pid} for pid in sel_p]).execute()
                         
-                        # 3. Auto-unión
                         if "invitacion_pendiente" in st.session_state:
                             cod = st.session_state.invitacion_pendiente
                             gr = supabase.table("grupos").select("id").eq("codigo_invitacion", cod).execute()
@@ -93,11 +87,10 @@ if not perfil_ok:
                                 del st.session_state.invitacion_pendiente
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error de Base de Datos: {e}")
-                        st.info("💡 Tip: Es probable que la tabla 'usuario_posiciones' todavía apunte a la tabla vieja. Revisá las Foreign Keys en Supabase.")
-                else: st.error("Faltan datos.")
+                        st.error(f"Error: {e}. Recordá correr el script SQL para UUIDs.")
+                else: st.error("Completá nombre y posiciones.")
         else:
-            st.error("No se encontraron posiciones en 'posiciones_config'. ¿Corriste el script SQL?")
+            st.error("No se encontraron posiciones de 'Fútbol 8' en la base de datos.")
     st.stop()
 
 # --- UTILIDADES ---
@@ -127,16 +120,16 @@ def vista_grupos():
                         if c1.button("⚙️ Config", key=f"g_adm_{g['id']}", use_container_width=True): ir_a("⚙️ Admin", g['id'])
                         if c2.button("📅 Equipos", key=f"g_part_{g['id']}", use_container_width=True): ir_a("📅 Partidos", g['id'])
                     else: st.caption(f"Código: {g['codigo_invitacion']}")
-    else: st.info("No tenés grupos activos.")
+    else: st.info("No tenés grupos todavía.")
     
     st.divider()
-    with st.expander("➕ Crear o Unirse"):
+    with st.expander("➕ Opciones"):
         c1, c2 = st.columns(2)
         with c1:
             with st.form("crear"):
                 n = st.text_input("Nombre Grupo")
                 mod = st.selectbox("Modalidad", ["Fútbol 5", "Fútbol 8"])
-                if st.form_submit_button("Crear Grupo"):
+                if st.form_submit_button("Crear"):
                     cod = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
                     meta_init = json.dumps({"mod": mod, "color_a": "Blanco", "color_b": "Negro"})
                     new = supabase.table("grupos").insert({"nombre": n, "tipo_cancha": meta_init, "codigo_invitacion": cod}).execute()
@@ -158,7 +151,7 @@ def vista_grupos():
 def vista_admin():
     st.header("⚙️ Gestión")
     admin_res = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
-    if not admin_res.data: return st.info("No sos admin.")
+    if not admin_res.data: return
     
     opc = {g['grupo_id']: g['grupos']['nombre'] for g in admin_res.data}
     idx = list(opc.keys()).index(st.session_state.selected_group_id) if st.session_state.selected_group_id in opc else 0
@@ -182,8 +175,8 @@ def vista_admin():
     with t2:
         meta = obtener_meta(g_act)
         c1, c2 = st.columns(2)
-        na = c1.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
-        nb = c2.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
+        na = c1.selectbox("Color A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
+        nb = c2.selectbox("Color B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
         if st.button("Guardar Config"):
             meta.update({"color_a": na, "color_b": nb})
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_id).execute()
@@ -195,7 +188,7 @@ def vista_admin():
             ir_a("🏟️ Grupos")
 
 # =====================================================
-# 📅 VISTA PARTIDOS
+# 📅 VISTA PARTIDOS (CON CONVERSIÓN DE POSICIONES)
 # =====================================================
 def vista_partidos():
     st.header("📅 Armado de Equipos")
@@ -207,24 +200,27 @@ def vista_partidos():
     g_id = st.selectbox("Grupo:", list(opc.keys()), format_func=lambda x: opc[x], index=idx, key="p_sel")
     g_info = next(g['grupos'] for g in admin_res.data if g['grupo_id'] == g_id)
     meta = obtener_meta(g_info)
-    tipo_cancha = meta.get('mod', 'Fútbol 5')
+    tipo_cancha_partido = meta.get('mod', 'Fútbol 5')
     
-    pos_cfg = supabase.table("posiciones_config").select("*").eq("tipo_cancha", tipo_cancha).execute().data
-    nombres_validos = [p['nombre_posicion'] for p in pos_cfg]
-    mapa_cats = {p['nombre_posicion']: p['categoria'] for p in pos_cfg}
+    # Cargar posiciones válidas para el partido (F5 o F8)
+    pos_partido_cfg = supabase.table("posiciones_config").select("*").eq("tipo_cancha", tipo_cancha_partido).execute().data
+    nombres_validos = [p['nombre_posicion'] for p in pos_partido_cfg]
+    mapa_cats = {p['nombre_posicion']: p['categoria'] for p in pos_partido_cfg}
 
-    res_j = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones_config(nombre_posicion)))").eq("grupo_id", g_id).execute()
+    # Cargar jugadores con sus categorías originales
+    res_j = supabase.table("grupo_miembros").select("usuarios(id, nombre, usuario_posiciones(posiciones_config(nombre_posicion, categoria)))").eq("grupo_id", g_id).execute()
     j_disp = []
     for item in res_j.data:
         u = item.get('usuarios')
         if u:
-            u['pos_perfil'] = [p['posiciones_config']['nombre_posicion'] for p in u.get('usuario_posiciones', []) if p.get('posiciones_config')]
+            # Traemos la info de perfil (que es de F8 por defecto)
+            u['info_perfil'] = [{"nombre": p['posiciones_config']['nombre_posicion'], "cat": p['posiciones_config']['categoria']} for p in u.get('usuario_posiciones', []) if p.get('posiciones_config')]
             j_disp.append(u)
 
     col1, col2 = st.columns([1, 1.8])
     with col1:
         st.subheader("1. Convocados")
-        st.checkbox("Todos", key="all_v34", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v34}) for j in j_disp])
+        st.checkbox("Todos", key="all_v35", on_change=lambda: [st.session_state.update({f"c{j['id']}": st.session_state.all_v35}) for j in j_disp])
         conv = [j for j in j_disp if st.checkbox(j['nombre'], key=f"c{j['id']}")]
     
     with col2:
@@ -233,8 +229,20 @@ def vista_partidos():
             for c in conv:
                 with st.container(border=True):
                     c1, c2 = st.columns([1, 2])
-                    match = next((p for p in c['pos_perfil'] if p in nombres_validos), nombres_validos[0] if nombres_validos else "Delantero")
-                    p_el = c1.selectbox(f"Pos {c['nombre']}", nombres_validos, index=nombres_validos.index(match), key=f"p_{c['id']}")
+                    
+                    # LÓGICA DE CONVERSIÓN:
+                    # Buscamos si alguna posición de su perfil (F8) matchea por CATEGORIA con las de este partido (F5)
+                    # Ej: Si es "Lateral" (DEF) en F8 y el partido es F5, buscamos "Defensor" (DEF)
+                    pos_match = nombres_validos[0]
+                    if c['info_perfil']:
+                        cat_perfil = c['info_perfil'][0]['cat']
+                        # Intentamos encontrar en nombres_validos uno que tenga la misma categoría
+                        for n_v in nombres_validos:
+                            if mapa_cats[n_v] == cat_perfil:
+                                pos_match = n_v
+                                break
+
+                    p_el = c1.selectbox(f"Pos {c['nombre']}", nombres_validos, index=nombres_validos.index(pos_match), key=f"p_{c['id']}")
                     n_el = c2.radio(f"Nivel {c['nombre']}", range(1,11), index=4, horizontal=True, key=f"l_{c['id']}", label_visibility="collapsed")
                     cat = mapa_cats.get(p_el, "MID")
                     final[c['id']] = {"obj": c, "nivel": n_el, "pos": p_el, "cat": cat}
@@ -253,30 +261,3 @@ def vista_partidos():
                 emo_a, emo_b = EMOJIS_COLORES.get(meta['color_a'], '⚪'), EMOJIS_COLORES.get(meta['color_b'], '⚫')
                 with c1:
                     st.success(f"{emo_a} EQUIPO A")
-                    for x in ea: st.write(f"• {x['obj']['nombre']} ({x['pos'][:3].upper()})")
-                with c2:
-                    st.error(f"{emo_b} EQUIPO B")
-                    for x in eb: st.write(f"• {x['obj']['nombre']} ({x['pos'][:3].upper()})")
-                
-                msg = f"⚽ *FULBACHO {opc[g_id].upper()}*\n\n*A {emo_a}:*\n" + "\n".join([f"• {j['obj']['nombre']} ({j['pos'][:3].upper()})" for j in ea])
-                msg += f"\n\n*B {emo_b}:*\n" + "\n".join([f"• {j['obj']['nombre']} ({j['pos'][:3].upper()})" for j in eb])
-                st.link_button("📲 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}", use_container_width=True)
-
-# =====================================================
-# 🎛️ NAVEGACIÓN
-# =====================================================
-vistas = ["🏟️ Grupos", "⚙️ Admin", "📅 Partidos", "📝 Perfil"]
-nav = st.radio("M", vistas, index=vistas.index(st.session_state.vista_actual), horizontal=True, label_visibility="collapsed")
-if nav != st.session_state.vista_actual:
-    st.session_state.vista_actual = nav
-    st.rerun()
-
-if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
-elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
-elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
-elif st.session_state.vista_actual == "📝 Perfil":
-    st.header("📝 Perfil")
-    nn = st.text_input("Nombre", value=u_db['nombre'] if u_db else "")
-    if st.button("Guardar"):
-        supabase.table("usuarios").update({"nombre": nn}).eq("id", user.id).execute()
-        st.success("Guardado")
