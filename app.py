@@ -129,46 +129,81 @@ def vista_perfil():
             st.success("¡Perfil actualizado!")
 
 # =====================================================
-# ⚙️ VISTA ADMIN
+# ⚙️ VISTA ADMIN (v2.9 - CON CÓDIGO Y COMPARTIR)
 # =====================================================
 def vista_admin():
     st.header("⚙️ Gestión de Grupo")
+    
+    # 1. Traer grupos que administro
     admin_g = supabase.table("grupo_miembros").select("grupo_id, grupos(*)").eq("usuario_id", user.id).eq("rol", "admin").execute()
+    
     if not admin_g.data:
         st.warning("No sos administrador de ningún grupo.")
         return
     
     opciones = {g['grupo_id']: g['grupos']['nombre'] for g in admin_g.data if g['grupos']}
-    idx = list(opciones.keys()).index(st.session_state.grupo_seleccionado) if st.session_state.grupo_seleccionado in opciones else 0
-    g_sel = st.selectbox("Grupo a gestionar:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx)
+    
+    # Pre-selección por atajo de la home
+    idx = 0
+    if st.session_state.grupo_seleccionado in opciones:
+        idx = list(opciones.keys()).index(st.session_state.grupo_seleccionado)
+    
+    g_sel = st.selectbox("Seleccionar Grupo:", options=list(opciones.keys()), format_func=lambda x: opciones[x], index=idx)
     grupo_actual = next(g['grupos'] for g in admin_g.data if g['grupo_id'] == g_sel)
 
-    t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados", "🎨 Configuración"])
+    # --- NUEVO: BOX DE INVITACIÓN ---
+    with st.container(border=True):
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.write("📢 **Invitar nuevos jugadores**")
+            codigo = grupo_actual.get('codigo_invitacion', 'S/C')
+            st.code(codigo, language="text")
+        with c2:
+            # Opción C: Link rápido para WhatsApp
+            link_inv = f"https://fulbacho.streamlit.app/?unirse={codigo}"
+            msg_inv = f"¡Sumate a mi grupo de fulbo *{grupo_actual['nombre']}*! \n\n1️⃣ Entrá acá: https://fulbacho.streamlit.app \n2️⃣ Poné este código: *{codigo}*"
+            st.link_button("📲 Pasar Código", f"https://wa.me/?text={urllib.parse.quote(msg_inv)}", use_container_width=True)
+
+    st.divider()
+
+    # --- PESTAÑAS DE GESTIÓN ---
+    t1, t2, t3 = st.tabs(["👥 Miembros", "➕ Invitados (Fantasma)", "🎨 Estética"])
     
     with t1:
-        miembros = supabase.table("grupo_miembros").select("rol, usuarios(nombre)").eq("grupo_id", g_sel).execute().data
-        for m in miembros: st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
+        miembros_data = supabase.table("grupo_miembros").select("rol, usuarios(nombre)").eq("grupo_id", g_sel).execute().data
+        for m in miembros_data: 
+            st.write(f"• **{m['usuarios']['nombre']}** ({m['rol']})")
     
     with t2:
         st.subheader("Carga rápida de invitados")
-        with st.form("inv", clear_on_submit=True):
+        st.caption("Usá esto para los que no tienen la app.")
+        with st.form("inv_fantasma", clear_on_submit=True):
             inv_n = st.text_input("Nombre del Jugador")
-            if st.form_submit_button("Agregar"):
+            if st.form_submit_button("Agregar al plantel"):
                 if inv_n:
-                    res = supabase.table("usuarios").insert({"nombre": inv_n}).execute()
-                    if res.data:
-                        supabase.table("grupo_miembros").insert({"grupo_id": g_sel, "usuario_id": res.data[0]['id'], "rol": "invitado"}).execute()
-                        st.success(f"{inv_n} agregado.")
-                        st.rerun()
+                    # Chequeo de duplicados
+                    nombres_existentes = [m['usuarios']['nombre'].lower() for m in miembros_data if m['usuarios']]
+                    if inv_n.lower() in nombres_existentes:
+                        st.warning("Ese nombre ya existe.")
+                    else:
+                        res = supabase.table("usuarios").insert({"nombre": inv_n}).execute()
+                        if res.data:
+                            supabase.table("grupo_miembros").insert({"grupo_id": g_sel, "usuario_id": res.data[0]['id'], "rol": "invitado"}).execute()
+                            st.success(f"{inv_n} agregado.")
+                            st.rerun()
+    
     with t3:
         meta = obtener_meta(grupo_actual)
         c1, c2 = st.columns(2)
-        na = c1.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_a']))
-        nb = c2.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta['color_b']))
-        if st.button("Guardar Estética"):
-            meta['color_a'], meta['color_b'] = na, nb
+        new_a = c1.selectbox("Color Equipo A", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta.get('color_a', 'Blanco')), key="edit_a")
+        new_b = c2.selectbox("Color Equipo B", list(EMOJIS_COLORES.keys()), index=list(EMOJIS_COLORES.keys()).index(meta.get('color_b', 'Negro')), key="edit_b")
+        
+        if st.button("Guardar Cambios de Estética"):
+            meta['color_a'] = new_a
+            meta['color_b'] = new_b
             supabase.table("grupos").update({"tipo_cancha": json.dumps(meta)}).eq("id", g_sel).execute()
-            st.success("Colores guardados en la base de datos.")
+            st.success("Configuración guardada.")
+            st.rerun()
 
 
 # =====================================================
@@ -325,6 +360,7 @@ if st.session_state.vista_actual == "🏟️ Grupos": vista_grupos()
 elif st.session_state.vista_actual == "📝 Perfil": vista_perfil()
 elif st.session_state.vista_actual == "⚙️ Admin": vista_admin()
 elif st.session_state.vista_actual == "📅 Partidos": vista_partidos()
+
 
 
 
